@@ -216,3 +216,5 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+# SPICE kernel data — download via kernels/fetch_kernels.py
+kernels/data/

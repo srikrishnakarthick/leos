@@ -41,6 +41,7 @@ def get_solar_spectrum(
     time: Time | None = None,
     resolution: str = "high",
     force_download: bool = False,
+    custom_file: str | None = None,
 ) -> Spectrum:
     """
     Return solar spectral irradiance I(λ) ± σ(λ) at 1 AU.
@@ -83,11 +84,14 @@ def get_solar_spectrum(
     >>>
     >>> # Today's TSIS-1 spectrum (auto-downloaded)
     >>> s = get_solar_spectrum(SpectralSource.TSIS1_SIM, time=Time.now())
+    >>>
+    >>> # User-supplied spectrum
+    >>> s = get_solar_spectrum(SpectralSource.CUSTOM, custom_file="my_data.txt")
     """
     info = get_info(source)
 
     # ── Validate time ──────────────────────────────────────────────────────
-    if info.is_time_resolved:
+    if info.is_time_resolved and source != SpectralSource.CUSTOM:
         if time is None:
             raise ValueError(
                 f"{source.value} is time-resolved. "
@@ -109,8 +113,12 @@ def get_solar_spectrum(
         SpectralSource.NRLSSI2    : _get_nrlssi2,
         SpectralSource.SATIRE_S   : _get_satire,
         SpectralSource.ANALYTIC   : _get_analytic,
+        SpectralSource.CUSTOM     : _get_custom,
     }
-    spectrum = fetchers[source](info, time, force_download)
+    if source == SpectralSource.CUSTOM:
+        spectrum = _get_custom(info, time, force_download, custom_file)
+    else:
+        spectrum = fetchers[source](info, time, force_download)
     return _resample(spectrum, resolution)
 
 
@@ -347,6 +355,95 @@ def _get_satire(info: SpectralSourceInfo, time: Time, force_download: bool) -> S
         )
     return _load_npz(local_path, info)
 
+# ── Custom user-supplied spectrum ─────────────────────────────────────────────
+
+def _get_custom(info, time, force_download, custom_file=None) -> Spectrum:
+    """
+    Load a user-supplied spectrum file.
+
+    Format — whitespace or comma separated, one row per measurement:
+        JD   wavelength_nm   flux_W_m2_nm   [uncertainty_W_m2_nm]
+
+    - Lines starting with # are comments.
+    - JD column selects the closest time to `time` if multiple epochs present.
+    - If time=None and multiple epochs exist, all are averaged.
+    - uncertainty column is optional — calibration sigma assigned if absent.
+    - Returned on native wavelength grid (no master-grid interpolation).
+    """
+    if custom_file is None:
+        raise ValueError(
+            "source=CUSTOM requires custom_file='path/to/file.txt'.\n"
+            "Format: JD  wavelength_nm  flux_W_m2_nm  [uncertainty_W_m2_nm]"
+        )
+    if not os.path.exists(custom_file):
+        raise FileNotFoundError(f"Custom spectrum file not found: {custom_file}")
+
+    print(f"  Loading custom spectrum: {custom_file}")
+
+    jd_col, wl_col, fl_col, uc_col = [], [], [], []
+    has_uncertainty = None
+
+    with open(custom_file, "r") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = line.replace(",", " ").split()
+            if has_uncertainty is None:
+                has_uncertainty = len(parts) >= 4
+            try:
+                jd_col.append(float(parts[0]))
+                wl_col.append(float(parts[1]))
+                fl_col.append(float(parts[2]))
+                uc_col.append(float(parts[3]) if has_uncertainty else 0.0)
+            except (ValueError, IndexError):
+                continue
+
+    if len(wl_col) == 0:
+        raise ValueError(f"No valid data rows found in {custom_file}.")
+
+    jd_arr = np.array(jd_col)
+    wl_arr = np.array(wl_col)
+    fl_arr = np.array(fl_col)
+    uc_arr = np.array(uc_col)
+
+    unique_jd = np.unique(jd_arr)
+
+    if len(unique_jd) == 1:
+        mask = np.ones(len(jd_arr), dtype=bool)
+        selected_jd = unique_jd[0]
+    elif time is not None:
+        closest_jd = unique_jd[np.argmin(np.abs(unique_jd - time.jd))]
+        mask = jd_arr == closest_jd
+        selected_jd = closest_jd
+        print(f"    Selected JD {selected_jd:.2f} (closest to {time.iso[:10]})")
+    else:
+        mask = np.ones(len(jd_arr), dtype=bool)
+        selected_jd = jd_arr.mean()
+        print(f"    No time specified — averaging {len(unique_jd)} epochs.")
+
+    wl_sel = wl_arr[mask]
+    fl_sel = fl_arr[mask]
+    uc_sel = uc_arr[mask]
+
+    order  = np.argsort(wl_sel)
+    wl_sel = wl_sel[order]
+    fl_sel = fl_sel[order]
+    uc_sel = uc_sel[order]
+
+    if not has_uncertainty:
+        uc_sel = _calibration_sigma(wl_sel, fl_sel,
+                                    default_pct=2.0)
+        print("    No uncertainty column — assigning 2% calibration sigma.")
+
+    print(f"    {len(wl_sel)} points, {wl_sel[0]:.1f}–{wl_sel[-1]:.1f} nm")
+
+    return Spectrum(
+        wl_sel * u.nm,
+        fl_sel * u.W / u.m**2 / u.nm,
+        uncertainty=uc_sel * u.W / u.m**2 / u.nm,
+        label=f"Custom | JD {selected_jd:.2f}",
+    )
 
 # ── Analytic fallback ─────────────────────────────────────────────────────────
 
@@ -414,6 +511,24 @@ def _parse_lisird_csv(text: str):
             continue
 
     return np.array(wl), np.array(fl), np.array(unc)
+
+def _calibration_sigma(wl_nm, flux, default_pct=2.0) -> np.ndarray:
+    """
+    Assign wavelength-dependent calibration uncertainty when no
+    instrumental uncertainty is available.
+    """
+    sigma = np.full_like(flux, default_pct / 100.0)
+    bands = [
+        (115,  200, 8.0),
+        (200,  300, 5.0),
+        (300,  400, 3.0),
+        (400,  700, 2.0),
+        (700,  1e6, 2.0),
+    ]
+    for lo, hi, pct in bands:
+        mask = (wl_nm >= lo) & (wl_nm < hi)
+        sigma[mask] = flux[mask] * (pct / 100.0)
+    return sigma
 
 
 def _instrument_sigma(wl_nm, flux, instrumental_unc, info: SpectralSourceInfo):

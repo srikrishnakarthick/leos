@@ -33,6 +33,7 @@ class SpectralSource(Enum):
     NRLSSI2    = "nrlssi2"     # Empirical model, 1610-present
     SATIRE_S   = "satire_s"    # Physics model, ~1974-present
     ANALYTIC   = "analytic"    # Offline Planck fallback, any time
+    CUSTOM     = "custom"      # User-supplied irradiance profile
 
 
 @dataclass
@@ -261,6 +262,23 @@ REGISTRY: dict[SpectralSource, SpectralSourceInfo] = {
             "Yeo et al. (2014). Solar irradiance variability in cycles 21 to 23 "
             "based on SATIRE-S. A&A. doi:10.1051/0004-6361/201423628"
         ),
+    ),
+
+    SpectralSource.CUSTOM: SpectralSourceInfo(
+        source                = SpectralSource.CUSTOM,
+        description           = "User-supplied irradiance profile (JD, wavelength, flux, uncertainty)",
+        time_start            = None,
+        time_end              = None,
+        time_note             = "as provided by user",
+        wl_min_nm             = 0.0,
+        wl_max_nm             = 1e9,
+        is_time_resolved      = True,
+        is_live               = False,
+        calibration_reference = None,
+        sigma_abs_percent     = {},
+        fetch_url             = None,
+        version               = "user-supplied",
+        reference             = "User-supplied data.",
     ),
 
     SpectralSource.ANALYTIC: SpectralSourceInfo(

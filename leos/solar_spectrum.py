@@ -42,6 +42,7 @@ def get_solar_spectrum(
     resolution: str = "high",
     force_download: bool = False,
     custom_file: str | None = None,
+    variability: "str | VariabilityProfile | None" = None,
 ) -> Spectrum:
     """
     Return solar spectral irradiance I(λ) ± σ(λ) at 1 AU.
@@ -119,6 +120,9 @@ def get_solar_spectrum(
         spectrum = _get_custom(info, time, force_download, custom_file)
     else:
         spectrum = fetchers[source](info, time, force_download)
+    # Apply variability profile to replace flat σ(λ)
+    if variability is not None:
+        spectrum = _apply_variability(spectrum, variability)
     return _resample(spectrum, resolution)
 
 
@@ -582,6 +586,37 @@ def _load_npz(path, info: SpectralSourceInfo) -> Spectrum:
         label=f"{info.source.value} (cached)",
     )
 
+def _apply_variability(spectrum: Spectrum, variability) -> Spectrum:
+    """
+    Replace spectrum's σ(λ) with data-driven variability profile sigma.
+    Interpolates profile onto spectrum's wavelength grid.
+    """
+    from leos.solar_variability import VariabilityProfile
+
+    # Accept file path or object
+    if isinstance(variability, str):
+        variability = VariabilityProfile.load(variability)
+
+    if not isinstance(variability, VariabilityProfile):
+        raise TypeError(
+            "variability must be a VariabilityProfile object or path to .npz file."
+        )
+
+    # Interpolate profile sigma onto spectrum wavelength grid
+    sigma_interp = np.interp(
+        spectrum.wavelengths.value,
+        variability.wl_nm,
+        variability.sigma,
+        left=variability.sigma[0],
+        right=variability.sigma[-1],
+    ) * u.W / u.m**2 / u.nm
+
+    return Spectrum(
+        spectrum.wavelengths,
+        spectrum.flux,
+        uncertainty=sigma_interp,
+        label=spectrum.label + " [variability σ]",
+    )
 
 def _resample(spectrum: Spectrum, resolution: str) -> Spectrum:
     if resolution == "low":

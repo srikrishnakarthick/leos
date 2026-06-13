@@ -218,3 +218,9 @@ __marimo__/
 .streamlit/secrets.toml
 # SPICE kernel data — download via kernels/fetch_kernels.py
 kernels/data/
+
+leos/data/*.npz
+leos/data/tsis1_sim_*.npz
+leos/data/sorce_sim_*.npz
+leos/data/uars_susim_*.npz
+leos/data/nrlssi2_*.npz

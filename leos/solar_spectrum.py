@@ -28,7 +28,7 @@ from leos.spectrum import Spectrum
 from leos.spectral_sources import SpectralSource, SpectralSourceInfo, REGISTRY, get_info
 
 # ── Cache directory ───────────────────────────────────────────────────────────
-_CACHE_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
+_CACHE_DIR = os.path.join(os.path.dirname(__file__), "data")
 os.makedirs(_CACHE_DIR, exist_ok=True)
 
 
@@ -172,6 +172,11 @@ def _get_astm(info: SpectralSourceInfo, time, force_download: bool) -> Spectrum:
 
     return _build_spectrum(wl_arr, fl_arr, sigma_arr, info, time)
 
+def _save_npz(path, wl, flux, sigma):
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    np.savez(path, wavelengths=wl, flux=flux, uncertainty=sigma)
 
 def _astm_sigma(wl_nm, flux, info: SpectralSourceInfo):
     """Wavelength-resolved σ for ASTM E-490 from registry calibration percents."""
@@ -570,9 +575,6 @@ def _build_spectrum(wl_nm, flux, sigma, info: SpectralSourceInfo, time) -> Spect
         label=label,
     )
 
-
-def _save_npz(path, wl, flux, sigma):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
     np.savez(path, wavelengths=wl, flux=flux, uncertainty=sigma)
 
 

@@ -28,7 +28,7 @@ from leos.spectrum import Spectrum
 from leos.spectral_sources import SpectralSource, SpectralSourceInfo, REGISTRY, get_info
 
 # ── Cache directory ───────────────────────────────────────────────────────────
-_CACHE_DIR = os.path.join(os.path.dirname(__file__), "..", "leos", "data")
+_CACHE_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
 os.makedirs(_CACHE_DIR, exist_ok=True)
 
 

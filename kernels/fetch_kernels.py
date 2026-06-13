@@ -29,9 +29,13 @@ KERNELS = {
         "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/pck/pck00011.tpc"
     ),
     # Solar system ephemeris — positions of planets and Moon
-    "de432s.bsp": (
-        "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/spk/planets/de432s.bsp"
+    "de440.bsp": (
+        "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/spk/planets/de440.bsp"
     ),
+    # Mars orientation — required for IAU_MARS body-fixed frame
+    "mars_iau2000_v1.tpc": (
+        "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/pck/mars_iau2000_v1.tpc"
+    )
 }
 
 

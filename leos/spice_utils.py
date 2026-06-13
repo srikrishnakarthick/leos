@@ -21,7 +21,8 @@ _KERNEL_DIR = os.path.join(
 _DEFAULT_KERNELS = [
     "naif0012.tls",   # leap seconds
     "pck00011.tpc",   # planetary constants
-    "de432s.bsp",     # solar system ephemeris
+    "de440.bsp",     # solar system ephemeris
+    "mars_iau2000_v1.tpc", # Mars orientation / body-fixed frame
 ]
 
 
@@ -135,7 +136,7 @@ def body_radii(name):
 
 # ── Position utilities ────────────────────────────────────────────────────────
 
-def sun_position(target_body, et, frame="J2000", observer="SUN"):
+def sun_position(target_body, et, frame="J2000"):
     """
     Return the position of the Sun relative to a target body at time et.
 
@@ -149,7 +150,12 @@ def sun_position(target_body, et, frame="J2000", observer="SUN"):
     position : astropy Quantity, shape (3,) in km
     light_time : astropy Quantity in seconds
     """
-    pos, lt = spice.spkpos(
-        "SUN", et, frame, "LT+S", target_body.upper()
-    )
+    # Map body names to barycenter IDs for de440.bsp compatibility
+    _BARYCENTER = {
+        "MERCURY": "1", "VENUS": "2", "EARTH": "3",
+        "MARS": "4",    "JUPITER": "5", "SATURN": "6",
+        "URANUS": "7",  "NEPTUNE": "8", "MOON": "301",
+    }
+    target = _BARYCENTER.get(target_body.upper(), target_body.upper())
+    pos, lt = spice.spkpos("SUN", et, frame, "LT+S", target)
     return pos * u.km, lt * u.s

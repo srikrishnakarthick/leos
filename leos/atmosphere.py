@@ -11,7 +11,7 @@ These profiles feed directly into the radiative transfer module.
 import numpy as np
 from scipy.special import erfc, erfcx
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, ClassVar
 from astropy import units as u
 
 
@@ -85,6 +85,27 @@ class AtmosphericProfile:
     effective_refractive_index: float = 1.0002926
     label                     : str   = ""
 
+    # ── Class-level constants (shared across methods) ───────────────────────
+
+    _SURFACE_GRAVITY_MS2: ClassVar[dict] = {
+        "earth": 9.807, "mars": 3.721, "moon": 1.620,
+        "venus": 8.870, "titan": 1.352, "europa": 1.315,
+    }
+    _MOLECULAR_MASS_KG: ClassVar[dict] = {
+        "H2": 3.347e-27, "He": 6.646e-27, "CH4": 2.664e-26,
+        "N2": 4.652e-26, "O2": 5.314e-26, "Ar": 6.634e-26,
+        "CO": 4.652e-26, "H2O": 2.991e-26, "NO": 4.983e-26,
+        "CO2": 7.308e-26, "O3": 7.972e-26, "NO2": 7.641e-26,
+        "SO2": 1.062e-25,
+    }
+    # Species without strong altitude-dependent sources/sinks/condensation —
+    # safe for the hydrostatic Ni = xi*P/(mi*g) formula in
+    # column_density_for(). O3, H2O etc. are NOT well-mixed and must be
+    # supplied via column_densities instead.
+    _WELL_MIXED_SPECIES: ClassVar[set] = {
+        "N2", "O2", "CO2", "Ar", "CO", "H2", "He", "Ne"
+    }
+
     def __post_init__(self):
         self.body = self.body.lower().strip()
         if not self.label:
@@ -133,6 +154,78 @@ class AtmosphericProfile:
         }
         return _fractions.get(self.body, 0.15)
 
+    # ── Mass and scale height ────────────────────────────────────────────────
+
+    @classmethod
+    def mean_molecular_mass(cls, composition: dict) -> float:
+        """
+        Mean molecular mass of a gas mixture, in kg.
+
+            m_bar = sum(xi * mi) / sum(xi)
+
+        Parameters
+        ----------
+        composition : dict
+            Volume fractions, e.g. {'N2': 0.78, 'O2': 0.21, ...}.
+            Species not in _MOLECULAR_MASS_KG are skipped.
+
+        Returns
+        -------
+        float
+            Mean molecular mass in kg.
+        """
+        total_mass, total_frac = 0.0, 0.0
+        for species, xi in composition.items():
+            mi = cls._MOLECULAR_MASS_KG.get(species)
+            if mi is None:
+                continue
+            total_mass += xi * mi
+            total_frac += xi
+        if total_frac == 0.0:
+            raise ValueError("No recognised species in composition.")
+        return total_mass / total_frac
+
+    @classmethod
+    def scale_height_from_temperature(
+        cls, temperature: u.Quantity, composition: dict, body: str = "earth"
+    ) -> u.Quantity:
+        """
+        Estimate atmospheric scale height from temperature.
+
+            H = kB * T / (m_bar * g)
+
+        Parameters
+        ----------
+        temperature : astropy Quantity (K)
+            Representative/effective atmospheric temperature.
+        composition : dict
+            Volume fractions, used to compute m_bar.
+        body : str
+            Used to look up surface gravity g. Unrecognised bodies
+            default to Earth's g.
+
+        Returns
+        -------
+        astropy Quantity (km)
+            Estimated scale height.
+
+        Notes
+        -----
+        This is a single-layer isothermal approximation, provided as
+        a fallback / sensitivity tool for bodies or conditions without
+        a tabulated profile. Where available, prefer scale heights
+        derived from an actual T(z)/P(z) profile (see
+        atmosphere_earth.py, atmosphere_mars.py) or the literature
+        presets in earth()/mars().
+        """
+        kB = 1.380649e-23  # J/K
+        g = cls._SURFACE_GRAVITY_MS2.get(body.lower(), 9.807)
+        m_bar = cls.mean_molecular_mass(composition)
+        H_m = kB * temperature.to(u.K).value / (m_bar * g)
+        return (H_m * u.m).to(u.km)
+
+    
+
     # ── Dust opacity ──────────────────────────────────────────────────────────
 
     def dust_tau_at(self, wavelength_nm: float) -> float:
@@ -164,7 +257,9 @@ class AtmosphericProfile:
         Vertical column density Ni (molecules/m^2) for a species.
 
         Uses pre-computed value from self.column_densities if
-        available. Otherwise derives from surface pressure and
+        available (REQUIRED for species that are not well-mixed,
+        e.g. O3, H2O — see _WELL_MIXED_SPECIES). Otherwise, for
+        well-mixed species, derives from surface pressure and
         volume mixing ratio assuming a well-mixed hydrostatic
         atmosphere:
 
@@ -179,6 +274,12 @@ class AtmosphericProfile:
         -------
         float
             Column density in molecules/m^2.
+
+        Raises
+        ------
+        ValueError
+            If species is not well-mixed and no override is present
+            in column_densities, or if its molecular mass is unknown.
         """
         if species in self.column_densities:
             return self.column_densities[species]
@@ -187,37 +288,26 @@ class AtmosphericProfile:
         if xi == 0.0:
             return 0.0
 
-        _molecular_mass_kg = {
-            "CO2": 7.308e-26,
-            "N2" : 4.652e-26,
-            "O2" : 5.314e-26,
-            "Ar" : 6.634e-26,
-            "H2O": 2.991e-26,
-            "O3" : 7.972e-26,
-            "CO" : 4.652e-26,
-            "CH4": 2.664e-26,
-            "NO" : 4.983e-26,
-            "NO2": 7.641e-26,
-            "SO2": 1.062e-25,
-        }
-        _surface_gravity = {
-            "earth" : 9.807,
-            "mars"  : 3.721,
-            "moon"  : 1.620,
-            "venus" : 8.870,
-            "titan" : 1.352,
-            "europa": 1.315,
-        }
+        if species not in self._WELL_MIXED_SPECIES:
+            raise ValueError(
+                f"'{species}' is not well-mixed (its vertical profile "
+                f"is set by photochemistry, condensation, or other "
+                f"altitude-dependent processes — e.g. the ozone layer, "
+                f"water vapor condensation). The hydrostatic "
+                f"Ni = xi*P/(mi*g) formula does not apply. Supply its "
+                f"total column directly via column_densities, e.g. "
+                f"from a satellite climatology (TOMS/OMI for O3)."
+            )
 
-        mi = _molecular_mass_kg.get(species)
+        mi = self._MOLECULAR_MASS_KG.get(species)
         if mi is None:
             raise ValueError(
                 f"Molecular mass not known for '{species}'. "
-                f"Add to _molecular_mass_kg or supply "
+                f"Add to _MOLECULAR_MASS_KG or supply "
                 f"column_densities dict."
             )
 
-        g = _surface_gravity.get(self.body, 9.807)
+        g = self._SURFACE_GRAVITY_MS2.get(self.body, 9.807)
         P = self.surface_pressure.to(u.Pa).value
 
         return (xi * P) / (mi * g)
@@ -396,11 +486,15 @@ class AtmosphericProfile:
                 "CO2": 0.0004,
             },
             has_atmosphere             = True,
-            column_densities           = {},
+            column_densities           = {
+                "O3": 8.1e24,  # ~300 DU, mid-latitude annual mean
+                               # (TOMS/OMI climatology); 1 DU = 2.69e20 molecules/m^2
+            },
             include_rayleigh           = True,
             rayleigh_king_factor       = 1.048,
             effective_refractive_index = 1.0002926,
             label                      = f"Earth standard (AOD={aod_550})",
+            
         )
 
     @classmethod

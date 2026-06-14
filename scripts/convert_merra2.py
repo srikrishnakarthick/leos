@@ -2,6 +2,17 @@
 """
 scripts/convert_merra2.py
 --------------------------
+IMPORTANT: Download format
+---------------------------
+This script requires NetCDF4 (.nc4 / .nc) input. If using the OPeNDAP
+or GES DISC Subsetter interfaces, ensure "netCDF" (not "ASCII" or
+"CSV") is selected as the output format — ASCII downloads will fail
+to open with nc.Dataset().
+
+Where to download (GES DISC, free NASA Earthdata login required):
+  https://disc.gsfc.nasa.gov/datasets/M2I3NPASM_5.12.4/summary
+  -> "Subset / Get Data" -> choose region/time/variables -> format: netCDF
+
 Convert MERRA-2 M2I3NPASM (or any M2I3NP* inst3_3d_asm_Np) netCDF4 file
 to the LEOS atmospheric column .npz format used by atmosphere_earth.py.
 
@@ -300,7 +311,9 @@ def _extract_3d(var, time_indices, i_lat, i_lon):
         arr = np.ma.filled(raw.astype(np.float64),
                            fill_value=np.nan)
         slices.append(arr)
-    return np.nanmean(slices, axis=0)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=RuntimeWarning)
+        return np.nanmean(slices, axis=0)
 
 
 def _extract_sfc(var, time_indices, i_lat, i_lon):
@@ -315,7 +328,9 @@ def _extract_sfc(var, time_indices, i_lat, i_lon):
             np.ma.array(raw, dtype=np.float64), fill_value=np.nan
         ))
         slices.append(val)
-    return float(np.nanmean(slices))
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=RuntimeWarning)
+        return float(np.nanmean(slices))
 
 
 def extract_column(ds, lat_target, lon_target,
@@ -602,7 +617,14 @@ def main():
     print(f"\nLEOS MERRA-2 converter")
     print(f"  input : {args.nc_file}")
 
-    ds = nc.Dataset(args.nc_file, "r")
+    try:
+        ds = nc.Dataset(args.nc_file, "r")
+    except OSError as e:
+        sys.exit(
+            f"ERROR: Could not open '{args.nc_file}' as NetCDF ({e}).\n"
+            f"If you downloaded from GES DISC's OPeNDAP or Subsetter, "
+            f"make sure the output format was set to 'netCDF', not 'ASCII'/'CSV'."
+        )
 
     # ── List modes ────────────────────────────────────────────────────────────
     if args.list_times:

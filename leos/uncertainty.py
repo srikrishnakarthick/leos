@@ -25,9 +25,9 @@ In addition to +, -, *, /, and ** (power), this module provides:
     (e.g. 1/d^2, sin, custom radiative transfer expressions), without
     needing a hand-written propagation rule for each one.
 
-All propagation here assumes the inputs are statistically INDEPENDENT
-(uncorrelated). Correlated inputs would require covariance terms not
-included here.
+    for ARBITRARY functions f(x1, x2, ...) of UncertainQuantity arguments.
+    Accepts an optional user-defined covariance matrix (`cov`) to handle
+    statistically dependent/correlated variables cleanly.
 """
 
 import numpy as np
@@ -266,56 +266,32 @@ class UncertainQuantity:
 # General error propagation via partial derivatives
 # ══════════════════════════════════════════════════════════════════════════════
 
-def propagate(func, *args, h_rel=1e-6):
+def propagate(func, *args, cov=None, h_rel=1e-6):
     """
     Propagate uncertainty through an arbitrary function via the
     first-order partial-derivatives formula:
 
-        sigma_f^2 = sum_i (df/dxi)^2 * sigma_i^2
+        sigma_f^2 = sum_i (df/dxi)^2 * sigma_i^2 + 2 * sum_{i<j} (df/dxi)*(df/dxj)*sigma_ij
 
-    assuming the arguments are statistically independent. Partial
-    derivatives are estimated by central finite differences, so this
-    works for ANY function of the central values — not just the
-    arithmetic operators (+, -, *, /, **) that UncertainQuantity
-    implements analytically.
+    assuming the arguments may have statistical dependencies defined by the 
+    covariance matrix `cov`.
 
     Parameters
     ----------
     func : callable
-        func(*central_values) -> central_value of the result. Each
-        central_value is whatever .value the corresponding argument
-        carries (a plain float/array, or an astropy Quantity) — func
-        must accept and return values consistently with that.
+        func(*central_values) -> central_value of the result.
     *args : UncertainQuantity, astropy Quantity, or plain number
-        Inputs. UncertainQuantity arguments contribute to the
-        propagated uncertainty; plain numbers/Quantities are treated
-        as exact (sigma=0) constants.
+        Inputs. Only UncertainQuantity arguments contribute to the error tracking.
+    cov : 2D array-like, optional
+        Covariance matrix matching the order and number of UncertainQuantity 
+        arguments passed in. If None, inputs are assumed to be independent.
     h_rel : float
-        Relative step size for the central finite-difference
-        derivative, h = h_rel * |xi| (or just h_rel if xi == 0).
+        Relative step size for the central finite-difference derivative.
 
     Returns
     -------
     UncertainQuantity
-        func evaluated at the central values, with sigma from the
-        quadrature sum above.
-
-    Examples
-    --------
-    >>> from astropy import units as u
-    >>> from leos.uncertainty import UncertainQuantity, propagate
-    >>> # I_TOA = E0 / d^2, d = 1.523 +/- 0.002 AU
-    >>> d = UncertainQuantity(1.523, 0.002, u.au)
-    >>> E0 = 1361.0 * u.W / u.m**2
-    >>> I = propagate(lambda dd: E0 / dd.to(u.au).value**2, d)
-    >>> print(I)
-    587... W / m2 ± ... W / m2
-
-    >>> # A two-argument nonlinear example: f(x, y) = x * sin(y)
-    >>> import numpy as np
-    >>> x = UncertainQuantity(2.0, 0.1)
-    >>> y = UncertainQuantity(0.5, 0.05)
-    >>> f = propagate(lambda xx, yy: xx * np.sin(yy), x, y)
+        func evaluated at the central values, with the propagated sigma.
     """
     values = []
     sigmas = []
@@ -331,14 +307,13 @@ def propagate(func, *args, h_rel=1e-6):
             is_uq.append(False)
 
     central = func(*values)
-
-    variance = None  # accumulated as (df/dxi * sigma_i)^2, same "shape" as central
-
-    for i, (val, sig, flag) in enumerate(zip(values, sigmas, is_uq)):
+    
+    # Extract derivatives for UncertainQuantity arguments
+    derivs = []
+    for i, (val, flag) in enumerate(zip(values, is_uq)):
         if not flag:
             continue
 
-        # Absolute step size for the finite difference
         if isinstance(val, u.Quantity):
             mag = val.value
             h_mag = np.where(mag != 0, np.abs(mag) * h_rel, h_rel)
@@ -357,17 +332,41 @@ def propagate(func, *args, h_rel=1e-6):
         f_minus = func(*args_minus)
 
         deriv = (f_plus - f_minus) / (2.0 * h)
+        derivs.append(deriv)
 
-        # contribution = (df/dxi) * sigma_i
-        contribution = deriv * sig
-        term = contribution ** 2
+    if not derivs:
+        return UncertainQuantity(central, central * 0.0)
 
-        variance = term if variance is None else variance + term
+    # 1. Independent variance contribution: sum_i (df/dxi * sigma_i)^2
+    variance = None
+    for deriv, sig in zip(derivs, sigmas):
+        if sig is not None:
+            term = (deriv * sig) ** 2
+            variance = term if variance is None else variance + term
 
-    if variance is None:
-        # No UncertainQuantity arguments — result is exact
-        sigma_f = central * 0.0
-    else:
-        sigma_f = np.sqrt(variance)
+    # 2. Dependent covariance contribution: 2 * sum_{i<j} (df/dxi)*(df/dxj)*sigma_ij
+    if cov is not None:
+        cov = np.asarray(cov)
+        num_uq = len(derivs)
+        if cov.shape != (num_uq, num_uq):
+            raise ValueError(f"Covariance matrix shape must match number of UncertainQuantity arguments ({num_uq}x{num_uq})")
+        
+        # Calculate cross-terms safely extracting numerical values out of quantities
+        for i in range(num_uq):
+            for j in range(i + 1, num_uq):
+                sigma_ij = cov[i, j]
+                if sigma_ij != 0:
+                    # Strip out potential units from derivatives safely during cross multiplication
+                    d_i = derivs[i].value if isinstance(derivs[i], u.Quantity) else derivs[i]
+                    d_j = derivs[j].value if isinstance(derivs[j], u.Quantity) else derivs[j]
+                    
+                    cross_term = 2.0 * d_i * d_j * sigma_ij
+                    
+                    # Match units back to variance container
+                    if isinstance(variance, u.Quantity):
+                        cross_term = cross_term * (variance.unit)
+                        
+                    variance = variance + cross_term
 
+    sigma_f = np.sqrt(variance)
     return UncertainQuantity(central, sigma_f)

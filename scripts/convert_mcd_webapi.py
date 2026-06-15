@@ -25,9 +25,9 @@ Variable catalog
 
 Dust scenario codes
 -------------------
-  1 = climatology average (default, recommended)
-  2 = cold / minimum dust
-  3 = warm / maximum dust
+  1 = climatology average solar (recommended default)
+  7 = warm scenario (dusty, maximum solar) — highest dust loading
+  8 = cold scenario (low dust, minimum solar) — lowest dust loading
   (see --list-dust for the full set, including dust storm and
   per-Martian-Year scenarios)
 
@@ -154,7 +154,7 @@ _SIGMA_T_BANDS = [
 # ── 36-profile bundled set definition ────────────────────────────────────────
 _BUNDLED_LS     = [0, 90, 180, 270]
 _BUNDLED_LATS   = [0, 45, 75]
-_BUNDLED_DUSTS  = [1, 2, 3]
+_BUNDLED_DUSTS  = [1, 7, 8]
 
 # ── Default variable group (reproduces original script behavior) ────────────
 _DEFAULT_VAR_GROUP = ["t", "p", "rho", "zareoid"]
@@ -215,8 +215,8 @@ MCD_VARIABLES = {
     "z_0":            "GCM surface roughness length z0 (m)",
     "thermal_inertia":"GCM surface thermal inertia",
     "ground_albedo":  "GCM surface bare ground albedo",
-    "dod":            "Monthly mean dust column visible optical depth",
-    "tauref":         "Daily mean dust column visible optical depth",
+    "tauref":         "Daily mean dust column visible optical depth above surface",
+    "dod":            "Monthly mean dust column visible optical depth above surface",
     "dust_mmr":       "Dust mass mixing ratio (kg/kg)",
     "dust_reff":      "Dust effective radius (m)",
     "dust_dep":       "Daily mean dust deposition rate (kg m-2 s-1)",
@@ -237,7 +237,7 @@ MCD_VARIABLES = {
     "sensib_flux":    "Surface sensible heat flux (W/m2)",
     "Cp":             "Air heat capacity Cp (J kg-1 K-1)",
     "gamma":          "Ratio of specific heats Cp/Cv",
-    "Rgas":           "Molecular gas constant R (J K-1 kg-1)",
+    "Rgas":           "R:Molecular gas constant (J K-1 kg-1)",
     "viscosity":      "Air viscosity estimation (N s m-2)",
     "pscaleheight":   "Scale height H(p) (m)",
     "vmr_co2":        "[CO2] volume mixing ratio (mol/mol)",
@@ -285,6 +285,9 @@ _SURFACE_VARS = {
     "surfstress", "sensib_flux", "zmax", "wstar_up", "wstar_dn",
     "co2ice", "surf_h2o_ice", "water_cap",
     "dod", "tauref", "dust_dep",
+    # radiative fluxes — all are surface or TOA quantities, not altitude-resolved
+    "fluxsurf_dn_sw", "fluxsurf_up_sw", "fluxsurf_lw",
+    "fluxtop_dn_sw", "fluxtop_up_sw", "fluxtop_lw",
     # column-integrated quantities (NOTE: assumed altitude-independent;
     # verify with --vars t,p,zareoid,col_co2 at two different pressure
     # levels if in doubt)
@@ -417,7 +420,7 @@ def _query_mcd(ls, lat, lon, localtime, dust_code, altitude, zkey,
 # ══════════════════════════════════════════════════════════════════════════════
 # Profile builder
 # ══════════════════════════════════════════════════════════════════════════════
-def build_profile(ls, lat, lon=0.0, localtime=6.0, dust_code=1,
+def build_profile(ls, lat, lon=0.0, localtime=12.0, dust_code=1,
                   var_groups=None, verbose=True):
     """
     Build a full vertical profile by querying MCD at each pressure level
@@ -481,8 +484,7 @@ def build_profile(ls, lat, lon=0.0, localtime=6.0, dust_code=1,
             res = _query_mcd(ls, lat, lon, localtime, dust_code,
                               altitude=p, zkey=4, var_codes=group)
             level_vals.update(res)
-            time.sleep(0.5)   # be polite to LMD servers
-
+            time.sleep(0.5)
         for code in level_codes:
             raw[code][i] = level_vals.get(code)
 
@@ -496,7 +498,7 @@ def build_profile(ls, lat, lon=0.0, localtime=6.0, dust_code=1,
                 for c in preview_codes
             )
             print(f"    [{i+1:2d}/{len(_PRESSURE_LEVELS_PA)}] "
-                  f"P={p:7.3f} Pa  {z_str}  {preview}")
+                      f"P={p:7.3f} Pa  {z_str}  {preview}")
 
     # Build altitude grid from zareoid, keep only levels with valid z
     z_m = raw["zareoid"]
@@ -644,7 +646,7 @@ def generate_bundled_profiles(out_dir=None, var_groups=None):
 
                 profile = build_profile(
                     ls=ls, lat=lat, lon=0.0,
-                    localtime=6.0, dust_code=dust,
+                    localtime=12.0, dust_code=dust,
                     var_groups=var_groups,
                     verbose=True,
                 )
@@ -714,8 +716,8 @@ def main():
                         help="Longitude [deg E]. Default 0.")
     parser.add_argument("--ls",    type=float, default=0.0,
                         help="Solar longitude [deg]. Default 0.")
-    parser.add_argument("--localtime", type=float, default=6.0,
-                        help="Local solar time [hrs]. Default 6.")
+    parser.add_argument("--localtime", type=float, default=12.0,
+                        help="Local solar time [hrs]. Default 12.")
     parser.add_argument("--dust",  type=int, default=1,
                         help="MCD dust scenario code (1=avg, 2=min, 3=max, "
                              "4-8=storm/warm/cold, 24-35=Martian Year N). "

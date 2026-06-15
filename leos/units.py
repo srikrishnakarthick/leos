@@ -1,34 +1,41 @@
 """
 leos.units
 ----------
-Central definition of all astropy units and physical constants used
-across the LEOS library. Every module imports from here — never
-define units inline elsewhere.
+Central definition of all astropy units and physical constants.
+Updated for Phase 2: Atmospheric Ingestion and Terrain Analysis.
 """
 
 from astropy import units as u
-from astropy.constants import L_sun, au
+from astropy.constants import L_sun, au, k_B, sigma_sb
 
-# ── Geometric ────────────────────────────────────────────────────────────────
+# -- Geometric & Terrain --
 ANGLE_UNIT          = u.deg
 SOLID_ANGLE_UNIT    = u.sr
 DISTANCE_UNIT       = u.au
 ELEVATION_UNIT      = u.m
+VELOCITY_UNIT       = u.m / u.s
 
-# ── Radiometric ──────────────────────────────────────────────────────────────
-IRRADIANCE_UNIT     = u.W / u.m**2           # broadband irradiance
-SPECTRAL_IRRAD_UNIT = u.W / u.m**2 / u.nm   # per-wavelength irradiance
+# -- Radiometric --
+IRRADIANCE_UNIT     = u.W / u.m**2
+SPECTRAL_IRRAD_UNIT = u.W / u.m**2 / u.nm
 WAVELENGTH_UNIT     = u.nm
-FLUX_UNIT           = u.W / u.m**2
 
-# ── Power / Energy ───────────────────────────────────────────────────────────
-POWER_UNIT          = u.W
-ENERGY_UNIT         = u.W * u.h                   # watt-hours, useful for mission budgets
+# -- Atmospheric & Thermodynamic --
+TEMPERATURE_UNIT    = u.K
+PRESSURE_UNIT       = u.Pa
+MASS_DENSITY_UNIT   = u.kg / u.m**3
+NUMBER_DENSITY_UNIT = u.m**-3
+VMR_UNIT            = u.dimensionless_unscaled  # mol/mol
+MMR_UNIT            = u.kg / u.kg               # mass mixing ratio
 
-# ── Uncertainty ──────────────────────────────────────────────────────────────
-# All uncertain quantities carry sigma in the same unit as the value.
-# Use relative_error() to get dimensionless fractional uncertainty.
+# -- Columnar Quantities --
+COLUMN_MASS_UNIT    = u.kg / u.m**2
+COLUMN_DENSITY_UNIT = u.m**-2                   # molecules/m2
+DOBSON_UNIT = u.def_unit('DU', 2.6867e20 * u.m**-2)       # Standard Earth O3 unit
 
-# ── Physical constants (re-exported for convenience) ─────────────────────────
-SOLAR_LUMINOSITY    = L_sun                  # 3.828e26 W
-AU                  = au                     # 1.496e11 m
+# -- Constants --
+SOLAR_LUMINOSITY    = L_sun
+AU                  = au
+BOLTZMANN_CONSTANT  = k_B
+STEFAN_BOLTZMANN    = sigma_sb
+

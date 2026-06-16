@@ -370,3 +370,81 @@ def propagate(func, *args, cov=None, h_rel=1e-6):
 
     sigma_f = np.sqrt(variance)
     return UncertainQuantity(central, sigma_f)
+# ── Trigonometric Functions ──────────────────────────────────────────────
+    # For f(x) = sin(x):     sigma_f = |cos(x)| * sigma_x
+    # For f(x) = cos(x):     sigma_f = |-sin(x)| * sigma_x
+    # For f(x) = tan(x):     sigma_f = |sec^2(x)| * sigma_x = (1 / cos^2(x)) * sigma_x
+    # For f(x) = sec(x):     sigma_f = |sec(x) * tan(x)| * sigma_x
+    # For f(x) = csc(x):     sigma_f = |-csc(x) * cot(x)| * sigma_x
+    # For f(x) = cot(x):     sigma_f = |-csc^2(x)| * sigma_x = (1 / sin^2(x)) * sigma_x
+    #
+    # All arguments must be dimensionless or explicitly in radians.
+
+    def _validate_and_extract_rad(self):
+        """Helper to enforce angular unit restrictions and return raw radian floats."""
+        allowed_units = [u.dimensionless_unscaled, u.rad]
+        if self.value.unit not in allowed_units:
+            raise ValueError(
+                f"Trigonometric operations require dimensionless or radian units, "
+                f"not '{self.value.unit}'."
+            )
+        
+        # Convert values and uncertainties safely to raw radian scalars
+        if self.value.unit == u.rad:
+            x = self.value.to_value(u.rad)
+            sig_x = self.uncertainty.to_value(u.rad)
+        else:
+            x = self.value.value if isinstance(self.value, u.Quantity) else self.value
+            sig_x = self.uncertainty.value if isinstance(self.uncertainty, u.Quantity) else self.uncertainty
+            
+        return x, sig_x
+
+    def sin(self):
+        """f(x) = sin(x) -> sigma_f = |cos(x)| * sigma_x"""
+        x, sig_x = self._validate_and_extract_rad()
+        val = np.sin(x)
+        sig = np.abs(np.cos(x)) * sig_x
+        return UncertainQuantity(val, sig, u.dimensionless_unscaled)
+
+    def cos(self):
+        """f(x) = cos(x) -> sigma_f = |sin(x)| * sigma_x"""
+        x, sig_x = self._validate_and_extract_rad()
+        val = np.cos(x)
+        sig = np.abs(np.sin(x)) * sig_x
+        return UncertainQuantity(val, sig, u.dimensionless_unscaled)
+
+    def tan(self):
+        """f(x) = tan(x) -> sigma_f = sigma_x / cos^2(x)"""
+        x, sig_x = self._validate_and_extract_rad()
+        val = np.tan(x)
+        cos_x = np.cos(x)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            sig = sig_x / (cos_x ** 2)
+        return UncertainQuantity(val, sig, u.dimensionless_unscaled)
+
+    def sec(self):
+        """f(x) = sec(x) -> sigma_f = |sec(x) * tan(x)| * sigma_x"""
+        x, sig_x = self._validate_and_extract_rad()
+        cos_x = np.cos(x)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            val = 1.0 / cos_x
+            sig = np.abs(val * np.tan(x)) * sig_x
+        return UncertainQuantity(val, sig, u.dimensionless_unscaled)
+
+    def csc(self):
+        """f(x) = csc(x) -> sigma_f = |csc(x) * cot(x)| * sigma_x"""
+        x, sig_x = self._validate_and_extract_rad()
+        sin_x = np.sin(x)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            val = 1.0 / sin_x
+            cot_x = 1.0 / np.tan(x)
+            sig = np.abs(val * cot_x) * sig_x
+        return UncertainQuantity(val, sig, u.dimensionless_unscaled)
+
+    def cot(self):
+        """f(x) = cot(x) -> sigma_f = sigma_x / sin^2(x)"""
+        x, sig_x = self._validate_and_extract_rad()
+        with np.errstate(divide="ignore", invalid="ignore"):
+            val = 1.0 / np.tan(x)
+            sig = sig_x / (np.sin(x) ** 2)
+        return UncertainQuantity(val, sig, u.dimensionless_unscaled)

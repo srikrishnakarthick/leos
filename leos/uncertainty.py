@@ -12,9 +12,13 @@ band rather than a bare number.
 
 In addition to +, -, *, /, and ** (power), this module provides:
   - sqrt(), exp(), log() with correct analytic derivative-based sigma
+  - Forward Trigonometric Functions: sin(), cos(), tan(), sec(), csc(), cot() 
+    supporting native angular transformations (u.rad, u.deg)
+  - Inverse Trigonometric Functions: asin(), acos(), atan(), asec(), acsc(), acot()
+    mapping dimensionless bounds cleanly to standard radian arcs (u.rad)
   - __neg__, __radd__, __rsub__, __rmul__, __rtruediv__ for symmetric
     operations with plain numbers/Quantities on the left
-  - a zero-value-safe relative_error()
+  - relative_uncertainty() tracking node values using safe relative division
   - propagate(func, *args): general first-order error propagation via
     the partial-derivatives formula
 
@@ -23,13 +27,10 @@ In addition to +, -, *, /, and ** (power), this module provides:
     for ARBITRARY functions f(x1, x2, ...) of UncertainQuantity (and/or
     plain) arguments, using numerical (central finite-difference)
     partial derivatives when no analytic derivative is supplied. This
-    covers any function not expressible via the basic operators above
-    (e.g. 1/d^2, sin, custom radiative transfer expressions), without
-    needing a hand-written propagation rule for each one.
-
-    for ARBITRARY functions f(x1, x2, ...) of UncertainQuantity arguments.
-    Accepts an optional user-defined covariance matrix (`cov`) to handle
-    statistically dependent/correlated variables cleanly.
+    covers any complex function not expressible via the basic operators above
+    (e.g. custom radiative transfer expressions), without needing a hand-written 
+    propagation rule for each one. Accepts an optional user-defined covariance 
+    matrix (`cov`) to handle statistically dependent/correlated variables cleanly.
 """
 
 import numpy as np

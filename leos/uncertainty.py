@@ -275,23 +275,18 @@ class UncertainQuantity:
 
     def _validate_and_extract_rad(self):
         """Helper to enforce angular unit restrictions and return raw radian floats."""
-        allowed_units = [u.dimensionless_unscaled, u.rad]
-        if self.value.unit not in allowed_units:
-            raise ValueError(
-                f"Trigonometric operations require dimensionless or radian units, "
-                f"not '{self.value.unit}'."
-            )
-        
-        # Convert values and uncertainties safely to raw radian scalars
-        if self.value.unit == u.rad:
-            x = self.value.to_value(u.rad)
-            sig_x = self.uncertainty.to_value(u.rad)
-        else:
+        if self.value.unit == u.dimensionless_unscaled:
             x = self.value.value if isinstance(self.value, u.Quantity) else self.value
             sig_x = self.uncertainty.value if isinstance(self.uncertainty, u.Quantity) else self.uncertainty
-            
-        return x, sig_x
-
+            return x, sig_x
+        try:
+            x = self.value.to_value(u.rad)
+            sig_x = self.uncertainty.to_value(u.rad)
+            return x, sig_x
+        except Exception:
+            raise ValueError(
+                f"Trigonometric operations require angular or dimensionless units, not '{self.value.unit}'."
+            )
     def sin(self):
         """f(x) = sin(x) -> sigma_f = |cos(x)| * sigma_x"""
         x, sig_x = self._validate_and_extract_rad()

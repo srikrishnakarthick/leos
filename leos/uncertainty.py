@@ -336,6 +336,65 @@ class UncertainQuantity:
             val = 1.0 / np.tan(x)
             sig = sig_x / (np.sin(x) ** 2)
         return UncertainQuantity(val, sig, u.dimensionless_unscaled)
+    # ── Inverse Trigonometric Functions ──────────────────────────────────────
+    # Returns values and absolute uncertainties explicitly in radians (u.rad).
+    # All inputs must be strictly dimensionless.
+
+    def _validate_dimensionless(self):
+        """Helper to enforce dimensionless restrictions for inverse trig mappings."""
+        if self.value.unit != u.dimensionless_unscaled:
+            raise ValueError("Inverse trigonometric functions require dimensionless inputs.")
+        x = self.value.value if isinstance(self.value, u.Quantity) else self.value
+        sig_x = self.uncertainty.value if isinstance(self.uncertainty, u.Quantity) else self.uncertainty
+        return x, sig_x
+
+    def asin(self):
+        """f(x) = asin(x) -> sigma_f = sigma_x / sqrt(1 - x^2)"""
+        x, sig_x = self._validate_dimensionless()
+        val = np.arcsin(x)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            sig = sig_x / np.sqrt(1.0 - x**2)
+        return UncertainQuantity(val * u.rad, sig * u.rad)
+
+    def acos(self):
+        """f(x) = acos(x) -> sigma_f = sigma_x / sqrt(1 - x^2)"""
+        x, sig_x = self._validate_dimensionless()
+        val = np.arccos(x)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            sig = sig_x / np.sqrt(1.0 - x**2)
+        return UncertainQuantity(val * u.rad, sig * u.rad)
+
+    def atan(self):
+        """f(x) = atan(x) -> sigma_f = sigma_x / (1 + x^2)"""
+        x, sig_x = self._validate_dimensionless()
+        val = np.arctan(x)
+        sig = sig_x / (1.0 + x**2)
+        return UncertainQuantity(val * u.rad, sig * u.rad)
+
+    def asec(self):
+        """f(x) = asec(x) = acos(1/x) -> sigma_f = sigma_x / (|x| * sqrt(x^2 - 1))"""
+        x, sig_x = self._validate_dimensionless()
+        with np.errstate(divide="ignore", invalid="ignore"):
+            val = np.arccos(1.0 / x)
+            sig = sig_x / (np.abs(x) * np.sqrt(x**2 - 1.0))
+        return UncertainQuantity(val * u.rad, sig * u.rad)
+
+    def acsc(self):
+        """f(x) = acsc(x) = asin(1/x) -> sigma_f = sigma_x / (|x| * sqrt(x^2 - 1))"""
+        x, sig_x = self._validate_dimensionless()
+        with np.errstate(divide="ignore", invalid="ignore"):
+            val = np.arcsin(1.0 / x)
+            sig = sig_x / (np.abs(x) * np.sqrt(x**2 - 1.0))
+        return UncertainQuantity(val * u.rad, sig * u.rad)
+
+    def acot(self):
+        """f(x) = acot(x) = atan(1/x) -> sigma_f = sigma_x / (1 + x^2)"""
+        x, sig_x = self._validate_dimensionless()
+        with np.errstate(divide="ignore", invalid="ignore"):
+            val = np.arctan(1.0 / x)
+            sig = sig_x / (1.0 + x**2)
+        return UncertainQuantity(val * u.rad, sig * u.rad)
+
 # General error propagation via partial derivatives
 # ══════════════════════════════════════════════════════════════════════════════
 

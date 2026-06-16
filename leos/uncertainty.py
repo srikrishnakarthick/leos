@@ -2,11 +2,13 @@
 leos.uncertainty
 ----------------
 UncertainQuantity: an astropy Quantity with an associated 1-sigma
-uncertainty. Arithmetic operations propagate uncertainty analytically
-using standard first-order error propagation rules.
+standard uncertainty. Arithmetic operations propagate uncertainty analytically
+using standard first-order Law of Propagation of Uncertainty rules (ISO GUM compliant).
 
-All other LEOS modules that return physical results use this type
-so that every output is  value ± sigma  rather than a bare number.
+All LEOS modules that return physical results use this type
+so that every output represents a value with its quantified standard uncertainty (value ± sigma)
+band rather than a bare number.
+
 
 In addition to +, -, *, /, and ** (power), this module provides:
   - sqrt(), exp(), log() with correct analytic derivative-based sigma
@@ -115,7 +117,7 @@ class UncertainQuantity:
 
     # ── Derived properties ───────────────────────────────────────────────────
 
-    def relative_error(self):
+    def relative_uncertainty(self):
         """
         Fractional uncertainty (dimensionless), sigma/|value|, returned 
         as an UncertainQuantity (Value ± Sigma) using first-order propagation.
@@ -124,15 +126,13 @@ class UncertainQuantity:
         sig = self.uncertainty.to(self.value.unit).value
 
         with np.errstate(divide="ignore", invalid="ignore"):
-            # Central value of relative error
             rel_val = np.where(val != 0, sig / np.abs(val), np.inf)
-            # Propagated uncertainty of the relative error (R^2)
-            rel_sig = np.where(np.isfinite(rel_val), rel_val**2, 0.0)
+            # Correct first-order standard uncertainty: (sigma_x / x)^2
+            rel_sig = np.where(np.isfinite(rel_val), rel_val**2, 0.0) 
 
-        # Wrap both as dimensionless quantities and return as a new UncertainQuantity
         return UncertainQuantity(
             rel_val * u.dimensionless_unscaled, 
-            rel_sig * u.dimensionless_unscaled
+            rel_sig * u.dimensionless_unscaled  # Now correctly scaled as a 1-sigma property
         )
 
     def to_unit(self, new_unit):

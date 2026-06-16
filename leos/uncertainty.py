@@ -274,37 +274,50 @@ class UncertainQuantity:
     #
     # All arguments must be dimensionless or explicitly in radians.
 
-    def _validate_and_extract_rad(self):
-        """Helper to enforce angular unit restrictions and return raw radian floats."""
-        if self.value.unit == u.dimensionless_unscaled:
-            x = self.value.value if isinstance(self.value, u.Quantity) else self.value
-            sig_x = self.uncertainty.value if isinstance(self.uncertainty, u.Quantity) else self.uncertainty
-            return x, sig_x
-        try:
-            x = self.value.to_value(u.rad)
-            sig_x = self.uncertainty.to_value(u.rad)
-            return x, sig_x
-        except Exception:
-            raise ValueError(
-                f"Trigonometric operations require angular or dimensionless units, not '{self.value.unit}'."
-            )
+    def _validate_and_extract(self, is_inverse=False):
+        """
+        Unified helper to validate unit constraints and extract raw numerical values.
+        """
+        if is_inverse:
+            try:
+                x = self.value.to_value(u.dimensionless_unscaled)
+                sig_x = self.uncertainty.to_value(u.dimensionless_unscaled)
+                return x, sig_x
+            except Exception:
+                raise ValueError(
+                    f"Inverse trigonometric functions require dimensionless inputs, not '{self.value.unit}'."
+                )
+        else:
+            if self.value.unit == u.dimensionless_unscaled:
+                x = self.value.value if isinstance(self.value, u.Quantity) else self.value
+                sig_x = self.uncertainty.value if isinstance(self.uncertainty, u.Quantity) else self.uncertainty
+                return x, sig_x
+            try:
+                x = self.value.to_value(u.rad)
+                sig_x = self.uncertainty.to_value(u.rad)
+                return x, sig_x
+            except Exception:
+                raise ValueError(
+                    f"Trigonometric operations require angular or dimensionless units, not '{self.value.unit}'."
+                )
+
     def sin(self):
         """f(x) = sin(x) -> sigma_f = |cos(x)| * sigma_x"""
-        x, sig_x = self._validate_and_extract_rad()
+        x, sig_x = self._validate_and_extract(is_inverse=False)
         val = np.sin(x)
         sig = np.abs(np.cos(x)) * sig_x
         return UncertainQuantity(val, sig, u.dimensionless_unscaled)
 
     def cos(self):
         """f(x) = cos(x) -> sigma_f = |sin(x)| * sigma_x"""
-        x, sig_x = self._validate_and_extract_rad()
+        x, sig_x = self._validate_and_extract(is_inverse=False)
         val = np.cos(x)
         sig = np.abs(np.sin(x)) * sig_x
         return UncertainQuantity(val, sig, u.dimensionless_unscaled)
 
     def tan(self):
         """f(x) = tan(x) -> sigma_f = sigma_x / cos^2(x)"""
-        x, sig_x = self._validate_and_extract_rad()
+        x, sig_x = self._validate_and_extract(is_inverse=False)
         val = np.tan(x)
         cos_x = np.cos(x)
         with np.errstate(divide="ignore", invalid="ignore"):
@@ -313,7 +326,7 @@ class UncertainQuantity:
 
     def sec(self):
         """f(x) = sec(x) -> sigma_f = |sec(x) * tan(x)| * sigma_x"""
-        x, sig_x = self._validate_and_extract_rad()
+        x, sig_x = self._validate_and_extract(is_inverse=False)
         cos_x = np.cos(x)
         with np.errstate(divide="ignore", invalid="ignore"):
             val = 1.0 / cos_x
@@ -322,7 +335,7 @@ class UncertainQuantity:
 
     def csc(self):
         """f(x) = csc(x) -> sigma_f = |csc(x) * cot(x)| * sigma_x"""
-        x, sig_x = self._validate_and_extract_rad()
+        x, sig_x = self._validate_and_extract(is_inverse=False)
         sin_x = np.sin(x)
         with np.errstate(divide="ignore", invalid="ignore"):
             val = 1.0 / sin_x
@@ -332,7 +345,7 @@ class UncertainQuantity:
 
     def cot(self):
         """f(x) = cot(x) -> sigma_f = sigma_x / sin^2(x)"""
-        x, sig_x = self._validate_and_extract_rad()
+        x, sig_x = self._validate_and_extract(is_inverse=False)
         with np.errstate(divide="ignore", invalid="ignore"):
             val = 1.0 / np.tan(x)
             sig = sig_x / (np.sin(x) ** 2)
@@ -341,17 +354,9 @@ class UncertainQuantity:
     # Returns values and absolute uncertainties explicitly in radians (u.rad).
     # All inputs must be strictly dimensionless.
 
-    def _validate_dimensionless(self):
-        """Helper to enforce dimensionless restrictions for inverse trig mappings."""
-        if self.value.unit != u.dimensionless_unscaled:
-            raise ValueError("Inverse trigonometric functions require dimensionless inputs.")
-        x = self.value.value if isinstance(self.value, u.Quantity) else self.value
-        sig_x = self.uncertainty.value if isinstance(self.uncertainty, u.Quantity) else self.uncertainty
-        return x, sig_x
-
     def asin(self):
         """f(x) = asin(x) -> sigma_f = sigma_x / sqrt(1 - x^2)"""
-        x, sig_x = self._validate_dimensionless()
+        x, sig_x = self._validate_and_extract(is_inverse=True)
         val = np.arcsin(x)
         with np.errstate(divide="ignore", invalid="ignore"):
             sig = sig_x / np.sqrt(1.0 - x**2)
@@ -359,7 +364,7 @@ class UncertainQuantity:
 
     def acos(self):
         """f(x) = acos(x) -> sigma_f = sigma_x / sqrt(1 - x^2)"""
-        x, sig_x = self._validate_dimensionless()
+        x, sig_x = self._validate_and_extract(is_inverse=True)
         val = np.arccos(x)
         with np.errstate(divide="ignore", invalid="ignore"):
             sig = sig_x / np.sqrt(1.0 - x**2)
@@ -367,14 +372,14 @@ class UncertainQuantity:
 
     def atan(self):
         """f(x) = atan(x) -> sigma_f = sigma_x / (1 + x^2)"""
-        x, sig_x = self._validate_dimensionless()
+        x, sig_x = self._validate_and_extract(is_inverse=True)
         val = np.arctan(x)
         sig = sig_x / (1.0 + x**2)
         return UncertainQuantity(val * u.rad, sig * u.rad)
 
     def asec(self):
         """f(x) = asec(x) = acos(1/x) -> sigma_f = sigma_x / (|x| * sqrt(x^2 - 1))"""
-        x, sig_x = self._validate_dimensionless()
+        x, sig_x = self._validate_and_extract(is_inverse=True)
         with np.errstate(divide="ignore", invalid="ignore"):
             val = np.arccos(1.0 / x)
             sig = sig_x / (np.abs(x) * np.sqrt(x**2 - 1.0))
@@ -382,7 +387,7 @@ class UncertainQuantity:
 
     def acsc(self):
         """f(x) = acsc(x) = asin(1/x) -> sigma_f = sigma_x / (|x| * sqrt(x^2 - 1))"""
-        x, sig_x = self._validate_dimensionless()
+        x, sig_x = self._validate_and_extract(is_inverse=True)
         with np.errstate(divide="ignore", invalid="ignore"):
             val = np.arcsin(1.0 / x)
             sig = sig_x / (np.abs(x) * np.sqrt(x**2 - 1.0))
@@ -390,7 +395,7 @@ class UncertainQuantity:
 
     def acot(self):
         """f(x) = acot(x) = atan(1/x) -> sigma_f = sigma_x / (1 + x^2)"""
-        x, sig_x = self._validate_dimensionless()
+        x, sig_x = self._validate_and_extract(is_inverse=True)
         with np.errstate(divide="ignore", invalid="ignore"):
             val = np.arctan(1.0 / x)
             sig = sig_x / (1.0 + x**2)

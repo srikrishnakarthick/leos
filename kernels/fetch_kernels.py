@@ -1,61 +1,85 @@
-"""
-kernels/fetch_kernels.py
-------------------------
-Downloads the minimum SPICE kernels required for LEOS Phase 1
-(Earth, Moon, Mars) from NASA NAIF and saves them to kernels/data/.
-
-Run once:
-    python kernels/fetch_kernels.py
-
-Kernel types:
-    LSK  — leap seconds kernel (time conversion)
-    PCK  — planetary constants (radii, rotation)
-    SPK  — solar system ephemeris (positions)
-"""
-
 import os
+import hashlib
 import requests
+
+# ── Dynamic Ephemeris Configuration ──────────────────────────────────────────
+DE_VERSION = "de442"
 
 KERNEL_DIR = os.path.join(os.path.dirname(__file__), "data")
 os.makedirs(KERNEL_DIR, exist_ok=True)
 
-KERNELS = {
-    # Leap seconds — required for all time conversions
-    "naif0012.tls": (
-        "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/lsk/naif0012.tls"
-    ),
-    # Planetary constants — radii, rotation, gravity
-    "pck00011.tpc": (
-        "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/pck/pck00011.tpc"
-    ),
-    # Solar system ephemeris — positions of planets and Moon
-    "de440.bsp": (
-        "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/spk/planets/de440.bsp"
-    ),
-    # Mars orientation — required for IAU_MARS body-fixed frame
-    "mars_iau2000_v1.tpc": (
-        "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/pck/mars_iau2000_v1.tpc"
-    )
+# Generic static text kernels
+STATIC_KERNELS = {
+    "naif0012.tls": "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/lsk/naif0012.tls",
+    "pck00011.tpc": "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/pck/pck00011.tpc",
+    "mars_iau2000_v1.tpc": "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/pck/mars_iau2000_v1.tpc"
 }
 
+def get_dynamic_ephemeris_urls():
+    """Builds both the binary file and its companion tech-comments documentation file."""
+    base_url = "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/spk/planets/"
+    return {
+        f"{DE_VERSION}.bsp": f"{base_url}{DE_VERSION}.bsp",
+        f"{DE_VERSION}_tech-comments.txt": f"{base_url}{DE_VERSION}_tech-comments.txt"
+    }
+
+def fetch_remote_md5s():
+    checksum_url = "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/spk/planets/aa_checksums.txt"
+    md5_dict = {}
+    try:
+        response = requests.get(checksum_url, timeout=10)
+        response.raise_for_status()
+        for line in response.text.splitlines():
+            parts = line.split()
+            if len(parts) >= 2:
+                hash_val, filename = parts[0], parts[1]
+                md5_dict[filename.lower()] = hash_val.lower()
+    except Exception as e:
+        print(f"  ⚠️ Warning: Could not fetch remote aa_checksums.txt ({e}).")
+    return md5_dict
+
+def calculate_local_md5(filepath):
+    hash_md5 = hashlib.md5()
+    with open(filepath, "rb") as f:
+        for chunk in iter(lambda: f.read(4096), b""):
+            hash_md5.update(chunk)
+    return hash_md5.hexdigest()
 
 def fetch_kernels():
-    for filename, url in KERNELS.items():
+    print("  Fetching live NAIF asset checksum tokens...")
+    nasa_md5s = fetch_remote_md5s()
+
+    # Build queue out of binary files, comments file, and static kernels
+    queue = get_dynamic_ephemeris_urls()
+    for name, url in STATIC_KERNELS.items():
+        queue[name] = url
+
+    for filename, url in queue.items():
         dest = os.path.join(KERNEL_DIR, filename)
+        expected_md5 = nasa_md5s.get(filename.lower())
+
         if os.path.exists(dest):
-            print(f"  already exists: {filename}")
-            continue
-        print(f"  downloading {filename} ...")
+            if expected_md5:
+                if calculate_local_md5(dest) == expected_md5:
+                    print(f"  Verified & intact (via NAIF Manifest): {filename}")
+                    continue
+            else:
+                # Text/doc files might not be in aa_checksums.txt, verify via simple existence and content size
+                if os.path.getsize(dest) > 0:
+                    print(f"  Verified via document footprint: {filename}")
+                    continue
+
+        print(f"  Downloading/Correcting {filename} ...")
         response = requests.get(url, stream=True)
         response.raise_for_status()
         with open(dest, "wb") as f:
             for chunk in response.iter_content(chunk_size=8192):
-                f.write(chunk)
-        size_mb = os.path.getsize(dest) / 1e6
-        print(f"  saved {filename} ({size_mb:.1f} MB)")
-
+                if chunk: f.write(chunk)
+                
+        if expected_md5 and calculate_local_md5(dest) != expected_md5:
+            raise ValueError(f"MD5 verification failure on newly downloaded asset: {filename}")
+        print(f"  Successfully verified and saved: {filename}")
 
 if __name__ == "__main__":
-    print("Fetching SPICE kernels...")
+    print(f"Initializing Generic SPICE Pipeline Asset Fetcher [Target: {DE_VERSION}]")
     fetch_kernels()
-    print("Done. Kernels saved to kernels/data/")

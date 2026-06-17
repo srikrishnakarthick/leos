@@ -227,3 +227,10 @@ leos/data/nrlssi2_*.npz
 
 # Exception: bundled data files committed to repo
 !leos/data/mcd_bundled_profiles.npz
+leos/kernels/data/
+leos/data/
+cspice/
+*.bsp
+*.tpc
+*.tls
+__pycache__/

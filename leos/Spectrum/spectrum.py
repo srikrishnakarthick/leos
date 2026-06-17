@@ -32,7 +32,7 @@ class Spectrum:
     --------
     >>> import numpy as np
     >>> from astropy import units as u
-    >>> from leos.spectrum import Spectrum
+    >>> from leos.Spectrum.spectrum import Spectrum
     >>> wl = np.linspace(200, 2000, 500) * u.nm
     >>> fl = np.ones(500) * u.W / u.m**2 / u.nm
     >>> s = Spectrum(wl, fl)

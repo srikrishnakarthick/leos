@@ -47,7 +47,7 @@ class Geometry:
     --------
     >>> from astropy import units as u
     >>> from astropy.time import Time
-    >>> from leos.geometry import Geometry
+    >>> from leos.Coordinates.geometry import Geometry
     >>> g = Geometry(
     ...     body='mars',
     ...     time=Time('2024-01-15T12:00:00', format='isot'),

@@ -76,7 +76,7 @@ def get_solar_spectrum(
 
     Examples
     --------
-    >>> from leos.solar_spectrum import get_solar_spectrum
+    >>> from leos.Spectrum.solar_spectrum import get_solar_spectrum
     >>> from leos.Spectrum.spectral_sources import SpectralSource
     >>> from astropy.time import Time
     >>>

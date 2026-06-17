@@ -16,8 +16,8 @@ import spiceypy as spice
 from astropy import units as u
 from astropy.time import Time
 
-from leos.geometry import Geometry
-from leos.spice_utils import utc_to_et, sun_position
+from leos.Coordinates.geometry import Geometry
+from leos.Coordinates.spice_utils import utc_to_et, sun_position
 from leos.uncertainty import UncertainQuantity
 from leos.units import ANGLE_UNIT, DISTANCE_UNIT
 

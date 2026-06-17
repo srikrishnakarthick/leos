@@ -331,7 +331,7 @@ def _fetch_spectrum_at(
     TSIS-1 → SORCE → UARS (UV only) → NRLSSI2 → ANALYTIC fallback.
     Returns None if all sources fail.
     """
-    from leos.solar_spectrum import get_solar_spectrum
+    from leos.Spectrum.solar_spectrum import get_solar_spectrum
 
     priority = _build_priority_chain(primary_source, time, wl_min_nm, wl_max_nm)
 
@@ -716,7 +716,7 @@ def compute_variability(
 
     Examples
     --------
-    >>> from leos.solar_variability import compute_variability
+    >>> from leos.Spectrum.solar_variability import compute_variability
     >>> from astropy.time import Time
     >>> from astropy import units as u
     >>>

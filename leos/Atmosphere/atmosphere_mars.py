@@ -41,7 +41,7 @@ from typing import Optional
 import numpy as np
 from astropy import units as u
 
-from leos.atmosphere import AtmosphericProfile
+from .atmosphere import AtmosphericProfile
 
 # ── Physical constants ────────────────────────────────────────────────────────
 _kB          = 1.380649e-23   # J/K

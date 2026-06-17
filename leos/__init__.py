@@ -10,6 +10,18 @@ from .Spectrum import (
     compute_variability,
     get_solar_spectrum,
 )
+from .Coordinates import (
+    Geometry,
+    discover_kernels,
+    load_kernels,
+    unload_kernels,
+    kernel_sandbox,
+    utc_to_et,
+    et_to_utc,
+    body_name_to_id,
+    body_radii,
+    sun_position,
+)
 
 __all__ = [
     "Spectrum",
@@ -22,4 +34,14 @@ __all__ = [
     "VariabilityProfile",
     "compute_variability",
     "get_solar_spectrum",
+    "Geometry",
+    "discover_kernels",
+    "load_kernels",
+    "unload_kernels",
+    "kernel_sandbox",
+    "utc_to_et",
+    "et_to_utc",
+    "body_name_to_id",
+    "body_radii",
+    "sun_position",
 ]

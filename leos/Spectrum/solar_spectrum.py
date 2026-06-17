@@ -24,8 +24,8 @@ from datetime import datetime, timedelta
 from astropy import units as u
 from astropy.time import Time
 
-from leos.spectrum import Spectrum
-from leos.spectral_sources import SpectralSource, SpectralSourceInfo, REGISTRY, get_info
+from leos.Spectrum.spectrum import Spectrum
+from leos.Spectrum.spectral_sources import SpectralSource, SpectralSourceInfo, REGISTRY, get_info
 
 # ── Cache directory ───────────────────────────────────────────────────────────
 _CACHE_DIR = os.path.join(os.path.dirname(__file__), "data")
@@ -77,7 +77,7 @@ def get_solar_spectrum(
     Examples
     --------
     >>> from leos.solar_spectrum import get_solar_spectrum
-    >>> from leos.spectral_sources import SpectralSource
+    >>> from leos.Spectrum.spectral_sources import SpectralSource
     >>> from astropy.time import Time
     >>>
     >>> # Static reference
@@ -464,7 +464,7 @@ def _get_analytic(info: SpectralSourceInfo, time, force_download: bool) -> Spect
     flux_per_nm = B * 6.8e-5 * np.pi * 1e-9
     wl_q = wl_nm * u.nm
     fl_q = flux_per_nm * u.W / u.m**2 / u.nm
-    from leos.spectrum import Spectrum as _Spec
+    from leos.Spectrum.spectrum import Spectrum as _Spec
     s_raw = _Spec(wl_q, fl_q)
     scale = 1361.0 / s_raw.integrate().value
     fl_scaled = flux_per_nm * scale
@@ -565,7 +565,7 @@ def _instrument_sigma(wl_nm, flux, instrumental_unc, info: SpectralSourceInfo):
 
 
 def _build_spectrum(wl_nm, flux, sigma, info: SpectralSourceInfo, time) -> Spectrum:
-    from leos.spectrum import Spectrum
+    from leos.Spectrum.spectrum import Spectrum
     date_str = time.iso[:10] if time is not None else "static"
     label = f"{info.source.value} | {date_str}"
     return Spectrum(
@@ -579,7 +579,7 @@ def _build_spectrum(wl_nm, flux, sigma, info: SpectralSourceInfo, time) -> Spect
 
 
 def _load_npz(path, info: SpectralSourceInfo) -> Spectrum:
-    from leos.spectrum import Spectrum
+    from leos.Spectrum.spectrum import Spectrum
     data = np.load(path)
     return Spectrum(
         data["wavelengths"] * u.nm,
@@ -593,7 +593,7 @@ def _apply_variability(spectrum: Spectrum, variability) -> Spectrum:
     Replace spectrum's σ(λ) with data-driven variability profile sigma.
     Interpolates profile onto spectrum's wavelength grid.
     """
-    from leos.solar_variability import VariabilityProfile
+    from leos.Spectrum.solar_variability import VariabilityProfile
 
     # Accept file path or object
     if isinstance(variability, str):

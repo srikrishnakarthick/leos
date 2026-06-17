@@ -1,13 +1,17 @@
-from .Spectrum import (
-    Spectrum,
+from .spectrum import Spectrum
+from .spectral_sources import (
     SpectralSource,
     SpectralSourceInfo,
     REGISTRY,
     get_info,
     sources_valid_at,
     best_source_for_time,
+)
+from .solar_variability import (
     VariabilityProfile,
     compute_variability,
+)
+from .solar_spectrum import (
     get_solar_spectrum,
 )
 

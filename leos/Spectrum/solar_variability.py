@@ -35,8 +35,8 @@ from astropy import units as u
 from astropy.time import Time
 from typing import Optional, Tuple
 
-from leos.spectral_sources import SpectralSource, REGISTRY, get_info
-from leos.spectrum import Spectrum
+from .spectral_sources import SpectralSource, REGISTRY, get_info
+from .spectrum import Spectrum
 
 
 # ══════════════════════════════════════════════════════════════════════════════

@@ -623,7 +623,7 @@ def main():
     )
 
     print("\nDone. Load in LEOS with:")
-    print(f"  from leos.solar_spectrum import get_solar_spectrum, SpectralSource")
+    print(f"  from leos.Spectrum.solar_spectrum import get_solar_spectrum, SpectralSource")
     print(f"  s = get_solar_spectrum(SpectralSource.SATIRE_S)")
 
 

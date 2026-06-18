@@ -184,10 +184,11 @@ class UncertainQuantity:
         if isinstance(other, UncertainQuantity): 
             return UncertainQuantity(self.value - other.value, np.sqrt(self.uncertainty**2 + other.uncertainty**2))
         other_qty = other if isinstance(other, u.Quantity) else other * self.value.unit
-        return UncertainQuantity(self.value - other, self.uncertainty)
+        return UncertainQuantity(self.value - other_qty, self.uncertainty)
 
-    def __rsub__(self, other): 
-        return UncertainQuantity(other - self.value, self.uncertainty)
+    def __rsub__(self, other):
+        other_qty = other if isinstance(other, u.Quantity) else other * self.value.unit
+        return UncertainQuantity(other_qty - self.value, self.uncertainty)
 
     def __neg__(self): 
         return UncertainQuantity(-self.value, self.uncertainty)

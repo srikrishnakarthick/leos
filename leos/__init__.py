@@ -9,7 +9,8 @@ atmospheres, spectral sources, and advanced data ingestion engines.
 """
 
 # 1. Structural Uncertainty Wrappers
-from .uncertainty import UncertainQuantity
+from .uncertainty import UncertainQuantity, propagate
+__all__ = ["UncertainQuantity", "propagate"]
 
 # 2. Central Units and Physical Constants
 from .units import (
@@ -49,7 +50,7 @@ from .Spectrum.spectral_sources import (
 from .Spectrum.solar_spectrum import get_solar_spectrum
 
 # 7. SATIRE Ingestion Tools (Exposed from scripts/convert_satire.py)
-from scripts.convert_satire import (
+from .scripts.convert_satire import (
     MASTER_WL,
     _to_master_grid,
     _calibration_sigma,
@@ -61,7 +62,7 @@ from scripts.convert_satire import (
 )
 
 # 8. MERRA-2 Reanalysis Ingestion Tools (Exposed from scripts/convert_merra2.py)
-from scripts.convert_merra2 import (
+from .scripts.convert_merra2 import (
     extract_column as extract_merra2_column,
     write_npz as write_merra2_npz,
     _pressure_to_altitude as _merra2_pressure_to_altitude,
@@ -72,7 +73,7 @@ from scripts.convert_merra2 import (
 )
 
 # 9. MCD Web API Ingestion Tools (Exposed from scripts/convert_mcd_webapi.py)
-from scripts.convert_mcd_webapi import (
+from .scripts.convert_mcd_webapi import (
     MCD_VARIABLES,
     _PRESSURE_LEVELS_PA as MCD_PRESSURE_LEVELS_PA,
     _DUST_CODES as MCD_DUST_CODES,
@@ -84,7 +85,7 @@ from scripts.convert_mcd_webapi import (
 )
 
 # 10. LRO LOLA Lunar Topography Ingestion Tools (Exposed from scripts/convert_lola.py)
-from scripts.convert_lola import (
+from .scripts.convert_lola import (
     _R_MOON_KM,
     _detect_format as _detect_lola_format,
     _geotiff_extract_patch,
@@ -96,7 +97,7 @@ from scripts.convert_lola import (
 )
 
 # 11. ERA5 Reanalysis Ingestion Tools (Exposed from scripts/convert_era5.py)
-from scripts.convert_era5 import (
+from .scripts.convert_era5 import (
     extract_column as extract_era5_column,
     write_npz as write_era5_npz,
     _pressure_to_altitude as _era5_pressure_to_altitude,

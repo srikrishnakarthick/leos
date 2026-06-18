@@ -76,40 +76,76 @@ class UncertainQuantity:
 
     def _format_rounded(self):
         """
-        Helper to round the central value and uncertainty to significant figures
-        based on the uncertainty's magnitude. Works for scalars and arrays.
+        Helper to format the central value and uncertainty based strictly on ISO GUM rules:
+        - Uncertainty rounded to 2 s.f. if the leading digit is 1 or 2.
+        - Uncertainty rounded to 1 s.f. if the leading digit is 3-9.
+        - Central value rounded to match the uncertainty's terminal decimal place.
         """
         val_raw = self.value.value
         sig_raw = self.uncertainty.to(self.value.unit).value
         unit_str = f" {self.value.unit}" if self.value.unit != u.dimensionless_unscaled else ""
 
+        def format_pair(v, s):
+            if s == 0 or not np.isfinite(s):
+                return str(v), str(s)
+
+            # Find natural string precision before any logging math
+            v_str_raw = str(v)
+            s_str_raw = str(s)
+            v_raw_dec = len(v_str_raw.split('.')[1]) if '.' in v_str_raw else 0
+            s_raw_dec = len(s_str_raw.split('.')[1]) if '.' in s_str_raw else 0
+            max_natural_dec = max(v_raw_dec, s_raw_dec)
+
+            # 1. Find the order of magnitude of the uncertainty's leading digit
+            order = int(np.floor(np.log10(s)))
+            
+            # Extract the raw leading digit
+            leading_digit = int(s / (10**order))
+            
+            # 2. Determine target significant figures for uncertainty based on leading digit
+            sig_figs = 2 if leading_digit in [1, 2] else 1
+            
+            # 3. Calculate target decimal places needed
+            decimals = max(0, sig_figs - 1 - order)
+            
+            # CRITICAL CONSTRAINT: Cap the decimal places to the maximum natural 
+            # depth if the raw inputs don't actually possess further decimal values.
+            decimals = min(decimals, max_natural_dec)
+            
+            # 4. Perform the rounding step on both parameters
+            s_rounded = round(s, decimals) if decimals > 0 else int(round(s, decimals))
+            v_rounded = round(v, decimals) if decimals > 0 else int(round(v, decimals))
+            
+            # Re-verify in case rounding shifted the value up a decade
+            new_order = int(np.floor(np.log10(s_rounded))) if s_rounded > 0 else order
+            if new_order != order:
+                decimals = max(0, sig_figs - 1 - new_order)
+                decimals = min(decimals, max_natural_dec) # Apply constraint here too
+                s_rounded = round(s, decimals) if decimals > 0 else int(round(s, decimals))
+                v_rounded = round(v, decimals) if decimals > 0 else int(round(v, decimals))
+
+            return f"{v_rounded:.{decimals}f}", f"{s_rounded:.{decimals}f}"
+
         if np.isscalar(val_raw):
             if sig_raw == 0 or not np.isfinite(sig_raw):
                 return f"{val_raw}{unit_str} ± {sig_raw}{unit_str}"
-            decimals = max(0, int(1 - np.floor(np.log10(sig_raw))))
-            return f"{val_raw:.{decimals}f}{unit_str} ± {sig_raw:.{decimals}f}{unit_str}"
+            v_str, s_str = format_pair(val_raw, sig_raw)
+            return f"{v_str}{unit_str} ± {s_str}{unit_str}"
         else:
             val_raw = np.asarray(val_raw)
             sig_raw = np.asarray(sig_raw)
             rounded_vals = []
             rounded_sigs = []
             for v, s in zip(val_raw.flat, sig_raw.flat):
-                if s == 0 or not np.isfinite(s):
-                    rounded_vals.append(str(v))
-                    rounded_sigs.append(str(s))
-                else:
-                    decimals = max(0, int(1 - np.floor(np.log10(s))))
-                    rounded_vals.append(f"{v:.{decimals}f}")
-                    rounded_sigs.append(f"{s:.{decimals}f}")
-            v_str = np.array(rounded_vals).reshape(val_raw.shape)
-            s_str = np.array(rounded_sigs).reshape(sig_raw.shape)
-            return f"{v_str}{unit_str} ± {s_str}{unit_str}"
-
-    def __str__(self): 
-        return self._format_rounded()
+                v_str, s_str = format_pair(v, s)
+                rounded_vals.append(v_str)
+                rounded_sigs.append(s_str)
+            v_str_arr = np.array(rounded_vals).reshape(val_raw.shape)
+            s_str_arr = np.array(rounded_sigs).reshape(sig_raw.shape)
+            return f"({v_str_arr}{unit_str} ± {s_str_arr}{unit_str})"
 
     def __repr__(self): 
-        return f"UncertainQuantity({self._format_rounded()})"
+        return f"({self._format_rounded()})"
 
     # ── Derived properties ───────────────────────────────────────────────────
 
@@ -138,7 +174,8 @@ class UncertainQuantity:
     def __add__(self, other):
         if isinstance(other, UncertainQuantity): 
             return UncertainQuantity(self.value + other.value, np.sqrt(self.uncertainty**2 + other.uncertainty**2))
-        return UncertainQuantity(self.value + other, self.uncertainty)
+        other_qty = other if isinstance(other, u.Quantity) else other * self.value.unit
+        return UncertainQuantity(self.value + other_qty, self.uncertainty)
 
     def __radd__(self, other): 
         return self.__add__(other)
@@ -146,6 +183,7 @@ class UncertainQuantity:
     def __sub__(self, other):
         if isinstance(other, UncertainQuantity): 
             return UncertainQuantity(self.value - other.value, np.sqrt(self.uncertainty**2 + other.uncertainty**2))
+        other_qty = other if isinstance(other, u.Quantity) else other * self.value.unit
         return UncertainQuantity(self.value - other, self.uncertainty)
 
     def __rsub__(self, other): 
@@ -159,6 +197,7 @@ class UncertainQuantity:
             val = self.value * other.value
             sig = np.abs(val) * np.sqrt(self._safe_rel(self.uncertainty, self.value)**2 + self._safe_rel(other.uncertainty, other.value)**2)
             return UncertainQuantity(val, sig)
+        other_qty = other if isinstance(other, u.Quantity) else other * u.dimensionless_unscaled
         return UncertainQuantity(self.value * other, self.uncertainty * other)
 
     def __rmul__(self, other): 
@@ -169,6 +208,7 @@ class UncertainQuantity:
             val = self.value / other.value
             sig = np.abs(val) * np.sqrt(self._safe_rel(self.uncertainty, self.value)**2 + self._safe_rel(other.uncertainty, other.value)**2)
             return UncertainQuantity(val, sig)
+        other_qty = other if isinstance(other, u.Quantity) else other * u.dimensionless_unscaled
         return UncertainQuantity(self.value / other, self.uncertainty / other)
 
     def __rtruediv__(self, other):

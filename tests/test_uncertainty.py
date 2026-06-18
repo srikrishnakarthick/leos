@@ -1,137 +1,195 @@
+import pytest
 import numpy as np
 from astropy import units as u
 import leos
 
-print("--- Testing Refactored UncertainQuantity Base Namespace ---")
+# ==============================================================================
+# 1. INITIALIZATION AND DIMENSIONAL GAURDRAILS
+# ==============================================================================
 
-# Scenario A: Passing raw numbers alongside an explicit physical unit container
-solar_flux = leos.UncertainQuantity(1361.0, 5.0, u.W / u.m**2)
-print(f"Scenario A: {solar_flux}")
+def test_initialization_variants():
+    """Verify initialization pathways (raw inputs vs explicit quantities)."""
+    # Scenario A: Raw inputs + separate unit
+    uq_a = leos.UncertainQuantity(1361.0, 5.0, u.W / u.m**2)
+    assert uq_a.value.unit == u.W / u.m**2
+    assert uq_a.uncertainty.value == 5.0
 
-# Scenario B: Passing pre-instantiated Astropy Quantities directly
-val_qty = 273.15 * u.K
-sig_qty = 0.05 * u.K
-sensor_temp = leos.UncertainQuantity(val_qty, sig_qty)
-print(f"Scenario B: {sensor_temp}")
+    # Scenario B: Pre-instantiated quantities
+    uq_b = leos.UncertainQuantity(273.15 * u.K, 0.05 * u.K)
+    assert uq_b.value.value == 273.15
+    assert uq_b.uncertainty.value == 0.05
 
-# Scenario C: Passing an Astropy Quantity value with a bare numerical uncertainty
-orbital_alt = leos.UncertainQuantity(500000.0 * u.m, 0.2)
-print(f"Scenario C: {orbital_alt}")
+    # Scenario C: Quantity value + raw uncertainty
+    uq_c = leos.UncertainQuantity(500000.0 * u.m, 0.2)
+    assert uq_c.uncertainty.unit == u.m
+    assert uq_c.uncertainty.value == 0.2
 
-# Scenario D: Intentional dimensional mismatch to trigger dimensional guardrails
-try:
-    mismatched = leos.UncertainQuantity(100.0 * u.m, 2.0 * u.s)
-except Exception as e:
-    print(f"Scenario D: Caught expected error -> {type(e).__name__}: {e}")
+def test_dimensional_mismatch_guardrails():
+    """Ensure initializing with incompatible dimensions raises a UnitConversionError."""
+    with pytest.raises(Exception):
+        # Meters value with Seconds uncertainty must be rejected
+        leos.UncertainQuantity(100.0 * u.m, 2.0 * u.s)
 
-# 1. Successful conversion: Transform a velocity metric into meters per second
-velocity_kmh = leos.UncertainQuantity(108.0, 3.6, u.km / u.h)
-print(f"Original Metric: {velocity_kmh}")
+def test_unit_conversion():
+    """Verify explicit unit transformation and type-checking blockades."""
+    velocity = leos.UncertainQuantity(108.0, 3.6, u.km / u.h)
+    si_velocity = velocity.to_unit(u.m / u.s)
+    
+    assert si_velocity.value.value == pytest.approx(30.0)
+    assert si_velocity.uncertainty.value == pytest.approx(1.0)
+    
+    with pytest.raises(Exception):
+        velocity.to_unit(u.kg)
 
-velocity_si = velocity_kmh.to_unit(u.m / u.s)
-print(f"Converted to SI: {velocity_si}")
+# ==============================================================================
+# 2. VECTORIZATION (ARRAY) SAFETY
+# ==============================================================================
 
-# 2. Invalid conversion: Attempt to convert velocity into mass (kilograms)
-try:
-    invalid_transform = velocity_kmh.to_unit(u.kg)
-except Exception as e:
-    print(f"Conversion Error: {type(e).__name__} -> {e}")
+def test_vectorized_array_propagation():
+    """Test that UncertainQuantity handles NumPy arrays for both values and uncertainties."""
+    val_arr = np.array([10.0, 20.0, 30.0])
+    unc_arr = np.array([1.0, 2.0, 3.0])
+    
+    uq_array = leos.UncertainQuantity(val_arr, unc_arr, u.m)
+    
+    # Check shape properties
+    assert uq_array.value.shape == (3,)
+    
+    # Perform math operation over the whole vector simultaneously
+    result = uq_array * 2.0
+    assert np.allclose(result.value.value, [20.0, 40.0, 60.0])
+    assert np.allclose(result.uncertainty.value, [2.0, 4.0, 6.0])
 
-# Scenario 1: Standard Fractional Uncertainty Verification
-measurement = leos.UncertainQuantity(10.0, 0.2, u.kg)
-rel_measurement = measurement.relative_uncertainty()
+# ==============================================================================
+# 3. BOUNDARY CONDITIONS & ZERO HANDLING
+# ==============================================================================
 
-print(f"Original: {measurement}")
-print(f"Relative: {rel_measurement}")
+def test_relative_uncertainty_and_zero_clamping():
+    """Verify relative uncertainty calculations over normal values and absolute zeros."""
+    # Standard Case
+    measurement = leos.UncertainQuantity(10.0, 0.2, u.kg)
+    rel = measurement.relative_uncertainty()
+    assert rel.value.value == pytest.approx(0.02)
 
-# Scenario 2: Absolute Zero Boundary Safety Clamping
-zero_edge = leos.UncertainQuantity(0.0, 1.5, u.m / u.s)
-rel_zero_edge = zero_edge.relative_uncertainty()
+    # Edge Case: Exact zero values should be safely clamped without throwing exceptions
+    zero_edge = leos.UncertainQuantity(0.0, 1.5, u.m / u.s)
+    rel_zero = zero_edge.relative_uncertainty()
+    assert rel_zero.value.value == np.inf  # sigma / 0 = inf
 
-print(f"\nZero Edge Original: {zero_edge}")
-print(f"Zero Edge Relative: {rel_zero_edge}")
+def test_zero_division_safety_hooks():
+    """Ensure division by an uncertain zero yields zero variance via internal hook protection."""
+    v_src = leos.UncertainQuantity(100.0, 6.0, u.V)
+    zero_denom = leos.UncertainQuantity(0.0, 1.5, u.A)
+    
+    # Division should result in an infinity central value safely
+    result = v_src / zero_denom
+    assert result.value.value == np.inf
 
+# ==============================================================================
+# 4. STANDARD ARITHMETIC & REFLECTED OPERATIONS
+# ==============================================================================
 
-print("\n--- Testing Arithmetic Methods ---")
-a = leos.UncertainQuantity(10.0, 3.0, u.m)
-b = leos.UncertainQuantity(4.0, 4.0, u.m)
+def test_reflected_and_scalar_arithmetic():
+    """Test standard operators and ensure reflected methods work identically."""
+    a = leos.UncertainQuantity(10.0, 3.0, u.m)
+    
+    # Addition and Reflected Addition
+    res1 = a + 5.0
+    res2 = 5.0 + a
+    assert res1.value == res2.value
+    assert res1.uncertainty == res2.uncertainty
+    
+    # Subtraction and Reflected Subtraction
+    res3 = a - 4.0
+    assert res3.value.value == 6.0
+    res4 = 14.0 - a
+    assert res4.value.value == 4.0
 
-print(f"Addition (a + b): {a + b}")
-print(f"Scalar Addition (a + 5): {a + 5}")
-print(f"Subtraction (a - b): {a - b}")
-print(f"Negation (-a): {-a}")
+    # Multiplication and Division
+    v_src = leos.UncertainQuantity(100.0, 6.0, u.V)
+    res_mul = 2 * v_src
+    assert res_mul.value.value == 200.0
+    assert res_mul.uncertainty.value == 12.0
 
-print("\n--- Testing Multiplication & Division ---")
-v_src = leos.UncertainQuantity(100.0, 6.0, u.V)
-i_src = leos.UncertainQuantity(20.0, 1.6, u.A)
+    res_div = 100 / v_src
+    assert res_div.value.value == 1.0
 
-print(f"Multiplication (v_src * i_src): {v_src * i_src}")
-print(f"Division (v_src / i_src): {v_src / i_src}")
+def test_powers_and_roots():
+    """Verify power exponents and square root tracking."""
+    area = leos.UncertainQuantity(16.0, 4.0, u.m**2)
+    
+    # Square Root rule verification: sigma_f = 0.5 * (sigma_x / sqrt(x))
+    root = area.sqrt()
+    assert root.value.value == 4.0
+    assert root.uncertainty.value == pytest.approx(0.5 * (4.0 / np.sqrt(16.0)))
 
-# _safe_rel() safety hook handling a zero boundary denominator
-zero_denom = leos.UncertainQuantity(0.0, 1.5, u.A)
-print(f"Zero Division Safety (v_src / zero_denom): {v_src / zero_denom}")
+    # Reject uncertain exponents
+    with pytest.raises(TypeError):
+        _ = area ** area
 
-print("\n--- Testing Power and Roots ---")
-area = leos.UncertainQuantity(16.0, 4.0, u.m**2)
+# ==============================================================================
+# 5. TRIGONOMETRIC DOMAIN CHECKS
+# ==============================================================================
 
-print(f"Power (area**2): {area**2}")
-print(f"Square Root (area.sqrt()): {area.sqrt()}")
+def test_trigonometric_validity_and_failures():
+    """Verify angular tracking across forward and inverse trigonometric configurations."""
+    angle = leos.UncertainQuantity(45.0, 1.0, u.deg)
+    
+    assert angle.sin().value.value == pytest.approx(np.sin(np.radians(45.0)))
+    assert angle.cos().value.value == pytest.approx(np.cos(np.radians(45.0)))
 
-print("\n--- Testing Trigonometric Operations ---")
-angle = leos.UncertainQuantity(45.0, 1.0, u.deg)
-
-print(f"Sine:      {angle.sin()}")
-print(f"Cosine:    {angle.cos()}")
-print(f"Tangent:   {angle.tan()}")
-print(f"Secant:    {angle.sec()}")
-print(f"Cosecant:  {angle.csc()}")
-print(f"Cotangent: {angle.cot()}")
-
-try:
+    # Mismatched non-angular inputs must fail forward trig operations
     length = leos.UncertainQuantity(10.0, 0.5, u.m)
-    length.sin()
-except ValueError as e:
-    print(f"Caught Expected Exception: {e}")
+    with pytest.raises(ValueError):
+        length.sin()
 
-print("\n--- Testing Inverse Trigonometric Operations ---")
-ratio = leos.UncertainQuantity(0.5, 0.02, u.dimensionless_unscaled)
-large_ratio = leos.UncertainQuantity(2.0, 0.1, u.dimensionless_unscaled)
+    # Inverse trig domain check
+    ratio = leos.UncertainQuantity(0.5, 0.02, u.dimensionless_unscaled)
+    assert ratio.asin().value.unit == u.rad
 
-print(f"Arcsin:   {ratio.asin()}")
-print(f"Arccos:   {ratio.acos()}")
-print(f"Arctan:   {ratio.atan()}")
-print(f"Arcsec:   {large_ratio.asec()}")
-print(f"Arccsc:   {large_ratio.acsc()}")
-print(f"Arccot:   {ratio.acot()}")
+    # Inverse trig must reject quantities carrying explicit physical dimensions
+    with pytest.raises(ValueError):
+        angle.asin()
 
-try:
-    angle_input = leos.UncertainQuantity(45.0, 1.0, u.deg)
-    angle_input.asin()
-except ValueError as e:
-    print(f"Caught Expected Exception: {e}")
+# ==============================================================================
+# 6. GENERAL REVOLUTIONARY PROPAGATION (FINITE DIFFERENCE & COVARIANCE)
+# ==============================================================================
 
-print("\n--- Test 1: Independent Variation Tracking ---")
-def custom_model(x, y):
+def custom_test_model(x, y):
     return (x**2) * np.sin(y)
 
-x_param = leos.UncertainQuantity(10.0, 0.2, u.m)
-y_param = leos.UncertainQuantity(30.0, 1.0, u.deg)
+def test_propagate_independent_vs_dependent():
+    """Verify multi-variable partial derivative mapping under correlation parameters."""
+    x_param = leos.UncertainQuantity(10.0, 0.2, u.m)
+    y_param = leos.UncertainQuantity(30.0, 1.0, u.deg)
 
-result_indep = leos.propagate(custom_model, x_param, y_param)
-print(f"Independent Result: {result_indep}")
+    # 1. Independent Tracking Execution
+    result_indep = leos.propagate(custom_test_model, x_param, y_param)
+    assert result_indep.value.unit == u.m**2
 
-print("\n--- Test 2: Strongly Dependent Covariance Tracking ---")
-sig_x = 0.2
-sig_y = 1.0
+    # 2. Correlated Covariance Tracking Execution
+    sig_x = 0.2
+    sig_y = 1.0
+    covariance_xy = 0.8 * sig_x * sig_y  # strong positive relationship (rho = 0.8)
+    
+    cov_matrix = [
+        [sig_x**2,      covariance_xy],
+        [covariance_xy, sig_y**2     ]
+    ]
+    
+    result_dep = leos.propagate(custom_test_model, x_param, y_param, cov=cov_matrix)
+    
+    # Positive covariance alongside matching positive partial derivatives should inflate final uncertainty
+    assert result_dep.uncertainty.value > result_indep.uncertainty.value
 
-# Cross-covariance tracking (Pearson Correlation coefficient rho = 0.8)
-covariance_xy = 0.8 * sig_x * sig_y  
+def test_propagate_malformed_covariance_rejection():
+    """Ensure propagate() throws an informative ValueError if a covariance shape is invalid."""
+    x_param = leos.UncertainQuantity(10.0, 0.2, u.m)
+    y_param = leos.UncertainQuantity(30.0, 1.0, u.deg)
+    
+    # Broken shape configuration (2x3 instead of 2x2 for 2 elements)
+    bad_cov = [[1, 0, 0], [0, 1, 0]]
+    
+    with pytest.raises(ValueError, match="Covariance matrix shape must match number of UncertainQuantity arguments"):
+        leos.propagate(custom_test_model, x_param, y_param, cov=bad_cov)
 
-cov_matrix = [
-    [sig_x**2,      covariance_xy],
-    [covariance_xy, sig_y**2     ]
-]
-
-result_dep = leos.propagate(custom_model, x_param, y_param, cov=cov_matrix)
-print(f"Dependent Result:   {result_dep}")

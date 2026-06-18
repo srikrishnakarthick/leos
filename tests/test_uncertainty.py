@@ -229,3 +229,13 @@ def test_dynamic_large_integer_iso_gum_rounding(value, uncertainty):
     
     expected_string = compute_expected_iso_gum(value, uncertainty)
     assert uq._format_rounded() == expected_string
+
+@pytest.mark.parametrize("val, unc, unit, expected", [
+    (10.05762, 0.027, u.Ohm, "10.058 Ohm ± 0.027 Ohm"),
+    (10.4713, 0.01047, u.mOhm, "10.471 mOhm ± 0.010 mOhm"),
+    (28.0531, 0.1285, u.kHz, "28.05 kHz ± 0.13 kHz")
+])
+def test_canonical_iso_gum_examples(val, unc, unit, expected):
+    """Verify engine alignment with explicit Section 7.2.6 test cases."""
+    uq = leos.UncertainQuantity(val, unc, unit)
+    assert uq._format_rounded() == expected

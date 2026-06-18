@@ -5,7 +5,8 @@ ephemeris files and static planetary physical constant kernels.
 """
 
 from .fetch_kernels import (
-    KERNEL_DIR,
+    DATA_DIRS,
+    KERNEL_ROOT,
     calculate_local_md5,
     fetch_kernels,
     fetch_remote_md5s,
@@ -13,7 +14,8 @@ from .fetch_kernels import (
 )
 
 __all__ = [
-    "KERNEL_DIR",
+    "DATA_DIRS",
+    "KERNEL_ROOT",
     "calculate_local_md5",
     "fetch_kernels",
     "fetch_remote_md5s",

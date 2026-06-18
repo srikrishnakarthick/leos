@@ -5,8 +5,17 @@ import requests
 # ── Dynamic Ephemeris Configuration ──────────────────────────────────────────
 DE_VERSION = "de442"
 
-KERNEL_DIR = os.path.join(os.path.dirname(__file__), "data")
-os.makedirs(KERNEL_DIR, exist_ok=True)
+# ── Updated Directory Architecture ──────────────────────────────────────────
+KERNEL_ROOT = os.path.join(os.path.dirname(__file__), "data")
+
+# Create dedicated subdirectories for pipeline sanitation
+DATA_DIRS = {
+    "generic": os.path.join(KERNEL_ROOT, "generic"),
+    "mission": os.path.join(KERNEL_ROOT, "mission")  # Playground for user CK/IK/SCLK files
+}
+
+for folder in DATA_DIRS.values():
+    os.makedirs(folder, exist_ok=True)
 
 # Generic static text kernels
 STATIC_KERNELS = {
@@ -55,7 +64,7 @@ def fetch_kernels():
         queue[name] = url
 
     for filename, url in queue.items():
-        dest = os.path.join(KERNEL_DIR, filename)
+        dest = os.path.join(DATA_DIRS["generic"], filename)
         expected_md5 = nasa_md5s.get(filename.lower())
 
         if os.path.exists(dest):

@@ -7,40 +7,71 @@ from astropy import units as u
 
 _KERNEL_DIR = os.path.join(os.path.dirname(__file__), "..", "kernels", "data")
 
+# ── Updated Absolute Path Mapping ───────────────────────────────────────────
+# Looks upward from Coordinates/ to find the sibling kernels/data directory
+_KERNEL_ROOT = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "kernels", "data")
+)
+
 def discover_kernels():
-    """Dynamically scan the data directory to match static frames and any active DE ephemeris."""
-    if not os.path.exists(_KERNEL_DIR):
-        return []
+    """Dynamically scans generic and mission directories to build a valid loading order."""
+    generic_dir = os.path.join(_KERNEL_ROOT, "generic")
+    mission_dir = os.path.join(_KERNEL_ROOT, "mission")
     
-    files = os.listdir(_KERNEL_DIR)
     resolved = []
     
-    # Core reference constants frames
-    for base in ["naif0012.tls", "pck00011.tpc", "mars_iau2000_v1.tpc"]:
-        if base in files:
-            resolved.append(os.path.join(_KERNEL_DIR, base))
-            
-    # Find any active binary planetary ephemeris file matching de*.bsp
-    ephem_files = [f for f in files if f.startswith("de") and f.endswith(".bsp")]
-    if ephem_files:
-        # Prioritize the highest version sorting array string automatically (e.g. de442 over de440)
-        ephem_files.sort()
-        resolved.append(os.path.join(_KERNEL_DIR, ephem_files[-1]))
+    # 1. Load Generic base kernels if the directory exists
+    if os.path.exists(generic_dir):
+        files = os.listdir(generic_dir)
         
+        # Chronological priority: LSK (Leapseconds) must be loaded first
+        for f in files:
+            if f.endswith(".tls"):
+                resolved.append(os.path.join(generic_dir, f))
+                
+        # Structural priority: Text PCK/FK constants
+        for f in files:
+            if f.endswith(".tpc") or f.endswith(".tf"):
+                resolved.append(os.path.join(generic_dir, f))
+                
+        # Ephemeris planetary tracking paths (SPK)
+        spk_files = [f for f in files if f.startswith("de") and f.endswith(".bsp")]
+        if spk_files:
+            spk_files.sort()
+            resolved.append(os.path.join(generic_dir, spk_files[-1]))
+
+    # 2. Automatically sweep up any custom files users dropped into the mission folder
+    if os.path.exists(mission_dir):
+        for root, _, files in os.walk(mission_dir):
+            for f in files:
+                # Catch all extensions: CK (.bc/.bck), IK (.ti), SCLK (.tsc), Binary PCK (.bpc), Frames (.tf)
+                if f.endswith(('.bc', '.bck', '.ti', '.tsc', '.bpc', '.tf')):
+                    resolved.append(os.path.join(root, f))
+                    
     return resolved
 
-def load_kernels(kernel_paths=None):
+def load_kernels(kernel_paths=None, extra_paths=None):
+    """Loads default planetary assets, plus optional runtime-supplied IK/CK/SCLK paths."""
     if kernel_paths is None:
         kernel_paths = discover_kernels()
-        if not kernel_paths:
+        if not kernel_paths and not extra_paths:
             raise FileNotFoundError(
-                f"No usable kernels found in {_KERNEL_DIR}.\nRun `python kernels/fetch_kernels.py` first."
+                f"No usable kernels found in {_KERNEL_ROOT}.\n"
+                f"Run your asset fetcher script or supply files manually via extra_paths."
             )
-    for path in kernel_paths:
+            
+    # Merge discoverable tracks with explicit runtime strings or lists
+    all_paths = list(kernel_paths)
+    if extra_paths:
+        if isinstance(extra_paths, str):
+            all_paths.append(extra_paths)
+        else:
+            all_paths.extend(extra_paths)
+            
+    for path in all_paths:
         if not os.path.exists(path):
             raise FileNotFoundError(f"Target kernel file path does not exist: {path}")
         spice.furnsh(path)
-
 def unload_kernels():
     spice.kclear()
 
@@ -79,24 +110,65 @@ def body_radii(name):
     radii = spice.bodvrd(clean_name, "RADII", 3)[1]
     return radii * u.km
 
-def sun_position(target_body, et, frame="J2000"):
-    _BARYCENTER = {
-        "MERCURY": "1", "VENUS": "2", "EARTH": "3",
-        "MARS": "4", "JUPITER": "5", "SATURN": "6",
-        "URANUS": "7", "NEPTUNE": "8", "MOON": "301",
-    }
-    clean_target = str(target_body).strip().upper()
-    target = _BARYCENTER.get(clean_target, clean_target)
-    et_arr = np.asarray(et)
+def sun_position(target, et, frame="J2000"):
+    """Calculates the 3D position vector pointing from a target body toward the Sun.
     
+    Accepts explicit planetary body centers (e.g., 'EARTH', 'MARS') or systemic 
+    barycenters (e.g., 'EARTH BARYCENTER', 'SATURN BARYCENTER').
+    """
+    _NAIF_IDS = {
+        "MERCURY BARYCENTER": "1",    "SATURN BARYCENTER": "6",    "MERCURY": "199",
+        "VENUS BARYCENTER": "2",      "URANUS BARYCENTER": "7",    "VENUS": "299",
+        "EARTH BARYCENTER": "3",      "NEPTUNE BARYCENTER": "8",   "MOON": "301",
+        "MARS BARYCENTER": "4",       "PLUTO BARYCENTER": "9",     "EARTH": "399",
+        "JUPITER BARYCENTER": "5",    "SUN": "10"
+    }
+    
+    # 1. Clean the incoming target string and look up its NAIF ID
+    clean_target = str(target).strip().upper()
+    target_id = _NAIF_IDS.get(clean_target, clean_target)
+    
+    et_arr = np.asarray(et, dtype=float)
+    
+    # 2. Vectorized processing for time arrays
     if et_arr.ndim > 0:
-        positions, light_times = [], []
-        for e in et_arr.flat:
-            pos, lt = spice.spkpos("SUN", float(e), frame, "LT+S", target)
-            positions.append(pos)
-            light_times.append(lt)
-        out_shape = et_arr.shape + (3,)
-        return np.array(positions).reshape(out_shape) * u.km, np.array(light_times).reshape(et_arr.shape) * u.s
+        total_elements = et_arr.size
+        positions = np.empty((total_elements, 3), dtype=float)
+        light_times = np.empty(total_elements, dtype=float)
         
-    pos, lt = spice.spkpos("SUN", float(et), frame, "LT+S", target)
+        for idx, e in enumerate(et_arr.flat):
+            pos, lt = spice.spkpos("SUN", e, frame, "LT+S", target_id)
+            positions[idx] = pos
+            light_times[idx] = lt
+            
+        out_shape = et_arr.shape + (3,)
+        return positions.reshape(out_shape) * u.km, light_times.reshape(et_arr.shape) * u.s
+        
+    # 3. Scalar processing for a single timestamp
+    pos, lt = spice.spkpos("SUN", float(et), frame, "LT+S", target_id)
     return pos * u.km, lt * u.s
+def get_spacecraft_attitude(sc_id, instrument_id, et, reference_frame="J2000", tolerance_seconds=1.0):
+    """Robust wrapper for CK attitude extraction.
+    
+    Automatically translates Ephemeris Time (ET) to Spacecraft Clock (SCLK) ticks.
+    """
+    try:
+        # 1. Convert ET to encoded SCLK ticks (Requires an .tsc kernel loaded)
+        sclk_ticks = spice.sce2c(sc_id, et)
+        
+        # 2. Convert look-up tolerance window from seconds to clock ticks
+        ticks_tolerance = spice.sctks2(sc_id, tolerance_seconds)
+        
+        # 3. Query the C-kernel with the converted clock metrics
+        matrix, clkout = spice.ckgp(instrument_id, sclk_ticks, ticks_tolerance, reference_frame)
+        return matrix
+        
+    except Exception as e:
+        error_str = str(e)
+        if "SPICE(KERNELVARNOTFOUND)" in error_str or "SPICE(NOTFOUND)" in error_str:
+            raise RuntimeError(
+                f"Failed to extract attitude matrix for instrument {instrument_id}.\n"
+                f"Reason: Missing required CK (orientation), IK (instrument specs), or SCLK (clock) kernel.\n"
+                f"Please ensure all relevant mission kernels are supplied via extra_paths."
+            ) from e
+        raise e

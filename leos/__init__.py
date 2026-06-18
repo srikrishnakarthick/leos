@@ -39,7 +39,8 @@ from .Atmosphere.atmosphere_moon import MoonSurfaceConditions, MoonAtmosphericSo
 
 # 5. Kernels Submodule Suite
 from .kernels.fetch_kernels import (
-    fetch_remote_md5s, calculate_local_md5, get_dynamic_ephemeris_urls, fetch_kernels, KERNEL_DIR
+    fetch_remote_md5s, calculate_local_md5, get_dynamic_ephemeris_urls, fetch_kernels,
+    DATA_DIRS, KERNEL_ROOT
 )
 
 # 6. Spectrum Submodule Suite
@@ -123,7 +124,8 @@ __all__ = [
     "ELEVATION_UNIT",
     "Geometry",
     "IRRADIANCE_UNIT",
-    "KERNEL_DIR",
+    "DATA_DIRS",
+    "KERNEL_ROOT",
     "MARS_ATMO_REGISTRY",
     "MASS_DENSITY_UNIT",
     "MASTER_WL",

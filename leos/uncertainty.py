@@ -105,26 +105,31 @@ class UncertainQuantity:
             # 2. Determine target significant figures for uncertainty based on leading digit
             sig_figs = 2 if leading_digit in [1, 2] else 1
             
-            # 3. Calculate target decimal places needed
-            decimals = max(0, sig_figs - 1 - order)
+            # 3. Calculate target decimal places needed (ALLOW NEGATIVE FOR WHOLE INTEGER ROUNDING)
+            decimals = sig_figs - 1 - order
             
             # CRITICAL CONSTRAINT: Cap the decimal places to the maximum natural 
             # depth if the raw inputs don't actually possess further decimal values.
             decimals = min(decimals, max_natural_dec)
             
             # 4. Perform the rounding step on both parameters
-            s_rounded = round(s, decimals) if decimals > 0 else int(round(s, decimals))
-            v_rounded = round(v, decimals) if decimals > 0 else int(round(v, decimals))
+            s_rounded = round(s, decimals)
+            v_rounded = round(v, decimals)
             
             # Re-verify in case rounding shifted the value up a decade
             new_order = int(np.floor(np.log10(s_rounded))) if s_rounded > 0 else order
             if new_order != order:
-                decimals = max(0, sig_figs - 1 - new_order)
+                decimals = sig_figs - 1 - new_order
                 decimals = min(decimals, max_natural_dec) # Apply constraint here too
-                s_rounded = round(s, decimals) if decimals > 0 else int(round(s, decimals))
-                v_rounded = round(v, decimals) if decimals > 0 else int(round(v, decimals))
-
-            return f"{v_rounded:.{decimals}f}", f"{s_rounded:.{decimals}f}"
+                s_rounded = round(s, decimals)
+                v_rounded = round(v, decimals)
+            
+            # If decimals is negative or zero, force both elements into integer scalars
+            if decimals <= 0:
+                s_rounded = int(s_rounded)
+                v_rounded = int(v_rounded)
+            display_digits = max(0, decimals)
+            return f"{v_rounded:.{display_digits}f}", f"{s_rounded:.{display_digits}f}"
 
         if np.isscalar(val_raw):
             if sig_raw == 0 or not np.isfinite(sig_raw):

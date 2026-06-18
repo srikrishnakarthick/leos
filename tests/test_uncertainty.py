@@ -193,3 +193,39 @@ def test_propagate_malformed_covariance_rejection():
     with pytest.raises(ValueError, match="Covariance matrix shape must match number of UncertainQuantity arguments"):
         leos.propagate(custom_test_model, x_param, y_param, cov=bad_cov)
 
+
+def compute_expected_iso_gum(v, s):
+    import numpy as np
+    """Programmatic engine to mirror ISO GUM rules without hardcoding expected strings."""
+    order = int(np.floor(np.log10(s)))
+    leading_digit = int(s / (10**order))
+    sig_figs = 2 if leading_digit in [1, 2] else 1
+    decimals = sig_figs - 1 - order
+    
+    s_expected = int(round(s, decimals))
+    v_expected = int(round(v, decimals))
+    
+    # Cascade check for order shift
+    new_order = int(np.floor(np.log10(s_expected))) if s_expected > 0 else order
+    if new_order != order:
+        decimals = sig_figs - 1 - new_order
+        s_expected = int(round(s, decimals))
+        v_expected = int(round(v, decimals))
+        
+    return f"{v_expected} ± {s_expected}"
+
+
+@pytest.mark.parametrize("value, uncertainty", [
+    (12345, 567),  # 1 s.f. -> rounds to hundreds place (-2) -> 12300 ± 600
+    (12345, 123),  # 2 s.f. -> rounds to tens place (-1)     -> 12350 ± 120
+    (987654, 34),  # 1 s.f. -> rounds to tens place (-1)     -> 987650 ± 30
+    (987654, 19),  # 2 s.f. -> rounds to units place (0)     -> 987654 ± 19
+    (5000, 950),   # 1 s.f. -> rounds to hundreds place (-2) -> 5000 ± 1000 (shifts up decade!)
+])
+def test_dynamic_large_integer_iso_gum_rounding(value, uncertainty):
+    """Verify integer boundaries above the decimal point round dynamically based on ISO GUM mathematical limits."""
+    import leos
+    uq = leos.UncertainQuantity(value, uncertainty)
+    
+    expected_string = compute_expected_iso_gum(value, uncertainty)
+    assert uq._format_rounded() == expected_string

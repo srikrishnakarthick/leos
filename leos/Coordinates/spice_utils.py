@@ -11,39 +11,58 @@ _KERNEL_ROOT = os.path.abspath(
 )
 
 def discover_kernels():
-    """Dynamically scans generic and mission directories to build a valid loading order."""
+    """
+    Dynamically scans generic and mission directories to build a valid loading order,
+    ensuring ALL files matching valid SPICE extensions are loaded safely.
+    """
     generic_dir = os.path.join(_KERNEL_ROOT, "generic")
     mission_dir = os.path.join(_KERNEL_ROOT, "mission")
     
-    resolved = []
+    # Define all 8 core SPICE extensions we care about
+    VALID_EXTENSIONS = ('.tls', '.tpc', '.tf', '.bsp', '.bc', '.bck', '.ti', '.tsc', '.bpc')
     
-    # 1. Load Generic base kernels if the directory exists
+    # Dictionaries to group files by structural type for loading priority
+    generic_buckets = {
+        "lsk": [],   # Leapseconds (.tls)
+        "meta": [],  # Text PCK Constants (.tpc) and Frames (.tf)
+        "spk": []    # Ephemeris tracking chunks (.bsp)
+    }
+    
+    # 1. Gather ALL files from the Generic base directory
     if os.path.exists(generic_dir):
-        files = os.listdir(generic_dir)
-        
-        # Chronological priority: LSK (Leapseconds) must be loaded first
-        for f in files:
+        for f in os.listdir(generic_dir):
+            full_path = os.path.join(generic_dir, f)
+            if not os.path.isfile(full_path):
+                continue
+                
             if f.endswith(".tls"):
-                resolved.append(os.path.join(generic_dir, f))
-                
-        # Structural priority: Text PCK/FK constants
-        for f in files:
-            if f.endswith(".tpc") or f.endswith(".tf"):
-                resolved.append(os.path.join(generic_dir, f))
-                
-        # Ephemeris planetary tracking paths (SPK)
-        spk_files = [f for f in files if f.endswith(".bsp")]
-        if spk_files:
-            spk_files.sort()
-            resolved.append(os.path.join(generic_dir, spk_files[-1]))
+                generic_buckets["lsk"].append(full_path)
+            elif f.endswith(".tpc") or f.endswith(".tf"):
+                generic_buckets["meta"].append(full_path)
+            elif f.endswith(".bsp"):
+                generic_buckets["spk"].append(full_path)
 
-    # 2. Automatically sweep up any custom files users dropped into the mission folder
+    # Sort files inside their buckets alphabetically to ensure deterministic loading sequence
+    for bucket in generic_buckets.values():
+        bucket.sort()
+
+    # Flatten the generic files into strict chronological priority order
+    resolved = []
+    resolved.extend(generic_buckets["lsk"])   # LSK goes absolute first
+    resolved.extend(generic_buckets["meta"])  # PCK/FK next
+    resolved.extend(generic_buckets["spk"])   # ALL SPK files follow smoothly
+
+    # 2. Automatically sweep up ALL valid mission files dropped into the folder
     if os.path.exists(mission_dir):
+        mission_files = []
         for root, _, files in os.walk(mission_dir):
             for f in files:
-                # Catch all extensions: CK (.bc/.bck), IK (.ti), SCLK (.tsc), Binary PCK (.bpc), Frames (.tf)
-                if f.endswith(('.bc', '.bck', '.ti', '.tsc', '.bpc', '.tf')):
-                    resolved.append(os.path.join(root, f))
+                if f.lower().endswith(VALID_EXTENSIONS):
+                    mission_files.append(os.path.join(root, f))
+        
+        # Sort mission files alphabetically so dependencies resolve predictably
+        mission_files.sort()
+        resolved.extend(mission_files)
                     
     return resolved
 
@@ -238,7 +257,12 @@ def get_spacecraft_attitude(sc_id, instrument_id, et, reference_frame="J2000", t
     """Robust wrapper for CK attitude orientation matrix tracking extraction."""
     try:
         sclk_ticks = spice.sce2c(sc_id, et)
-        ticks_tolerance = spice.sctks2(sc_id, tolerance_seconds)
+        
+        # Calculate tick tolerance using delta ET
+        ticks_plus_1 = spice.sce2c(sc_id, et + 1.0)
+        ticks_per_second = abs(ticks_plus_1 - sclk_ticks)
+        ticks_tolerance = ticks_per_second * tolerance_seconds
+        
         matrix, _ = spice.ckgp(instrument_id, sclk_ticks, ticks_tolerance, reference_frame)
         return matrix
     except Exception as e:
@@ -281,7 +305,8 @@ def get_surface_illumination(target, et, lat, lon, frame=None, method="ELLIPSOID
 def get_fov_intercept(inst_name, target, et, inst_frame, method="ELLIPSOID"):
     """Calculates ray-surface terrain footprint intercepts for an instrument boresight."""
     try:
-        shape, frame, bounds, rays = spice.getfov(body_name_to_id(inst_name), 3)
+        shape, frame, boresight, nbounds, bounds = spice.getfov(body_name_to_id(inst_name), 3)
+    except Exception as e:
         boresight = bounds[0]
     except Exception as e:
         raise RuntimeError(

@@ -25,7 +25,12 @@ from .units import (
 from .Coordinates.geometry import Geometry, SUPPORTED_BODIES
 from .Coordinates.spice_utils import (
     discover_kernels, load_kernels, unload_kernels, kernel_sandbox,
-    utc_to_et, et_to_utc, body_name_to_id, body_radii, sun_position
+    utc_to_et, et_to_utc, body_name_to_id, body_radii, sun_position,
+    # ── High-Fidelity Geometry Engine Extensions ──
+    get_sub_point, get_sub_solar_point, angular_separation,
+    get_state_vector, transform_position, transform_state,
+    get_spacecraft_attitude, get_surface_illumination,
+    get_fov_intercept, check_occultation
 )
 from .Coordinates.solar_geometry import (
     sun_body_distance, solar_zenith_angle, illumination_fraction, subsolar_point, toa_irradiance
@@ -119,12 +124,12 @@ __all__ = [
     "BOLTZMANN_CONSTANT",
     "COLUMN_DENSITY_UNIT",
     "COLUMN_MASS_UNIT",
-    "DISTANCE_UNIT",
+    "DATA_DIRS",                 
+    "DISTANCE_UNIT",             
     "DOBSON_UNIT",
     "ELEVATION_UNIT",
     "Geometry",
     "IRRADIANCE_UNIT",
-    "DATA_DIRS",
     "KERNEL_ROOT",
     "MARS_ATMO_REGISTRY",
     "MASS_DENSITY_UNIT",
@@ -174,11 +179,13 @@ __all__ = [
     "_parse_mcd_response",
     "_query_mcd",
     "_to_master_grid",
+    "angular_separation",
     "best_source_for_time",
     "body_name_to_id",
     "body_radii",
     "build_mcd_profile",
     "calculate_local_md5",
+    "check_occultation",
     "discover_kernels",
     "et_to_utc",
     "extract_era5_column",
@@ -187,8 +194,14 @@ __all__ = [
     "fetch_remote_md5s",
     "generate_mcd_bundled_profiles",
     "get_dynamic_ephemeris_urls",
+    "get_fov_intercept",
     "get_info",
     "get_solar_spectrum",
+    "get_spacecraft_attitude",
+    "get_state_vector",
+    "get_sub_point",
+    "get_sub_solar_point",
+    "get_surface_illumination",
     "illumination_fraction",
     "kernel_sandbox",
     "load_kernels",
@@ -202,6 +215,8 @@ __all__ = [
     "sun_body_distance",
     "sun_position",
     "toa_irradiance",
+    "transform_position",
+    "transform_state",
     "unload_kernels",
     "utc_to_et",
     "write_era5_npz",

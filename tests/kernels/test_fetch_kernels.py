@@ -4,20 +4,28 @@ import tempfile
 import shutil
 import hashlib
 from unittest.mock import patch, MagicMock
+import importlib.machinery
+import importlib.util
 
-# Import targets from your production file
-import leos.kernels.fetch_kernels as fk
+# Absolute file-path import to completely bypass package/init namespace shadowing
+MODULE_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../leos/kernels/fetch_kernels.py"))
+loader = importlib.machinery.SourceFileLoader("fetch_kernels_module", MODULE_PATH)
+spec = importlib.util.spec_from_loader("fetch_kernels_module", loader)
+fk = importlib.util.module_from_spec(spec)
+loader.exec_module(fk)
 
 class TestFetchKernelsPipeline(unittest.TestCase):
+    # Keep the rest of your TestFetchKernelsPipeline class code completely identical!
 
     def setUp(self):
         # Create an isolated temporary directory for every test run
         self.test_dir = tempfile.mkdtemp()
-        self.saved_kernel_dir = fk.KERNEL_DIR
-        fk.KERNEL_DIR = self.test_dir
+        
+        # FIX: Directly patch the dictionary that the script uses for routing files
+        self.saved_generic_dir = fk.DATA_DIRS["generic"]
+        fk.DATA_DIRS["generic"] = self.test_dir
 
         self.dummy_content = b"Mock SPICE Data Footprint"
-        # Compute the real MD5 signature of our test data stream
         self.valid_md5 = hashlib.md5(self.dummy_content).hexdigest()
 
         # Build dynamic manifest string where ALL assets perfectly match the data hash
@@ -32,7 +40,8 @@ class TestFetchKernelsPipeline(unittest.TestCase):
     def tearDown(self):
         # Safely sweep away the temporary testing environment
         shutil.rmtree(self.test_dir)
-        fk.KERNEL_DIR = self.saved_kernel_dir
+        # FIX: Restore the original production environment directory configuration
+        fk.DATA_DIRS["generic"] = self.saved_generic_dir
 
     def helper_create_local_file(self, filename, content):
         """Helper to inject controlled files into the sandboxed test workspace."""
@@ -65,7 +74,9 @@ class TestFetchKernelsPipeline(unittest.TestCase):
 
         # Check that files were created down in the sandboxed target path
         queue = fk.get_dynamic_ephemeris_urls()
-        queue.update(fk.STATIC_KERNELS)
+        for filename in fk.STATIC_KERNELS.keys():
+            queue[filename] = fk.STATIC_KERNELS[filename]
+            
         for filename in queue.keys():
             self.assertTrue(os.path.exists(os.path.join(self.test_dir, filename)))
 
@@ -78,7 +89,9 @@ class TestFetchKernelsPipeline(unittest.TestCase):
 
         # Pre-seed the sandboxed directory with correct intact assets
         queue = fk.get_dynamic_ephemeris_urls()
-        queue.update(fk.STATIC_KERNELS)
+        for filename in fk.STATIC_KERNELS.keys():
+            queue[filename] = fk.STATIC_KERNELS[filename]
+            
         for filename in queue.keys():
             self.helper_create_local_file(filename, self.dummy_content)
 
@@ -100,7 +113,9 @@ class TestFetchKernelsPipeline(unittest.TestCase):
 
         # Pre-seed files with invalid text data to trigger integrity mismatches
         queue = fk.get_dynamic_ephemeris_urls()
-        queue.update(fk.STATIC_KERNELS)
+        for filename in fk.STATIC_KERNELS.keys():
+            queue[filename] = fk.STATIC_KERNELS[filename]
+            
         for filename in queue.keys():
             self.helper_create_local_file(filename, b"Corrupted Data")
 

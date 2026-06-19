@@ -21,7 +21,8 @@ for folder in DATA_DIRS.values():
 STATIC_KERNELS = {
     "naif0012.tls": "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/lsk/naif0012.tls",
     "pck00011.tpc": "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/pck/pck00011.tpc",
-    "mars_iau2000_v1.tpc": "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/pck/mars_iau2000_v1.tpc"
+    "mars_iau2000_v1.tpc": "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/pck/mars_iau2000_v1.tpc",
+    "mar099s.bsp": "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/spk/planets/mar099s.bsp"
 }
 
 def get_dynamic_ephemeris_urls():

@@ -6,29 +6,29 @@ from astropy.time import Time
 from astropy import units as u
 
 # ── Updated Absolute Path Mapping ───────────────────────────────────────────
-_KERNEL_ROOT = os.path.abspath(
+_DEFAULT_KERNEL_ROOT = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "kernels", "data")
 )
 
-def discover_kernels():
+def discover_kernels(custom_root=None):
     """
-    Dynamically scans generic and mission directories to build a valid loading order,
-    ensuring ALL files matching valid SPICE extensions are loaded safely.
+    Dynamically scans generic and mission directories to build a valid loading order.
+    Accepts an optional custom_root path string for external workspaces.
     """
-    generic_dir = os.path.join(_KERNEL_ROOT, "generic")
-    mission_dir = os.path.join(_KERNEL_ROOT, "mission")
+    # Fall back to package internal root if no explicit path is passed
+    base_root = os.path.abspath(custom_root) if custom_root else _DEFAULT_KERNEL_ROOT
     
-    # Define all 8 core SPICE extensions we care about
+    generic_dir = os.path.join(base_root, "generic")
+    mission_dir = os.path.join(base_root, "mission")
+    
     VALID_EXTENSIONS = ('.tls', '.tpc', '.tf', '.bsp', '.bc', '.bck', '.ti', '.tsc', '.bpc')
     
-    # Dictionaries to group files by structural type for loading priority
     generic_buckets = {
-        "lsk": [],   # Leapseconds (.tls)
-        "meta": [],  # Text PCK Constants (.tpc) and Frames (.tf)
-        "spk": []    # Ephemeris tracking chunks (.bsp)
+        "lsk": [],   
+        "meta": [],  
+        "spk": []    
     }
     
-    # 1. Gather ALL files from the Generic base directory
     if os.path.exists(generic_dir):
         for f in os.listdir(generic_dir):
             full_path = os.path.join(generic_dir, f)
@@ -42,17 +42,14 @@ def discover_kernels():
             elif f.endswith(".bsp"):
                 generic_buckets["spk"].append(full_path)
 
-    # Sort files inside their buckets alphabetically to ensure deterministic loading sequence
     for bucket in generic_buckets.values():
         bucket.sort()
 
-    # Flatten the generic files into strict chronological priority order
     resolved = []
-    resolved.extend(generic_buckets["lsk"])   # LSK goes absolute first
-    resolved.extend(generic_buckets["meta"])  # PCK/FK next
-    resolved.extend(generic_buckets["spk"])   # ALL SPK files follow smoothly
+    resolved.extend(generic_buckets["lsk"])  
+    resolved.extend(generic_buckets["meta"]) 
+    resolved.extend(generic_buckets["spk"])  
 
-    # 2. Automatically sweep up ALL valid mission files dropped into the folder
     if os.path.exists(mission_dir):
         mission_files = []
         for root, _, files in os.walk(mission_dir):
@@ -60,19 +57,20 @@ def discover_kernels():
                 if f.lower().endswith(VALID_EXTENSIONS):
                     mission_files.append(os.path.join(root, f))
         
-        # Sort mission files alphabetically so dependencies resolve predictably
         mission_files.sort()
         resolved.extend(mission_files)
                     
     return resolved
 
-def load_kernels(kernel_paths=None, extra_paths=None):
+def load_kernels(kernel_paths=None, extra_paths=None, custom_dir=None):
     """Loads default planetary assets, plus optional runtime-supplied IK/CK/SCLK paths."""
     if kernel_paths is None:
-        kernel_paths = discover_kernels()
+        # Pass the custom directory down to the scanner pipeline
+        kernel_paths = discover_kernels(custom_root=custom_dir)
         if not kernel_paths and not extra_paths:
+            target_display_path = custom_dir if custom_dir else _DEFAULT_KERNEL_ROOT
             raise FileNotFoundError(
-                f"No usable kernels found in {_KERNEL_ROOT}.\n"
+                f"No usable kernels found in {target_display_path}.\n"
                 f"Run your asset fetcher script or supply files manually via extra_paths."
             )
             
@@ -87,6 +85,7 @@ def load_kernels(kernel_paths=None, extra_paths=None):
         if not os.path.exists(path):
             raise FileNotFoundError(f"Target kernel file path does not exist: {path}")
         spice.furnsh(path)
+
 
 def unload_kernels():
     """Clears the SPICE kernel pool completely to release system memory handles."""

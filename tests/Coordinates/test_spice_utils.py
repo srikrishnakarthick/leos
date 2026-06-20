@@ -8,6 +8,8 @@ and geometric event search sub-systems.
 
 import os
 import unittest
+import tempfile
+import shutil
 import numpy as np
 from unittest.mock import patch, MagicMock
 from astropy.time import Time
@@ -28,6 +30,56 @@ class TestSpiceUtilsRigorous(unittest.TestCase):
         self.et_scalar = 700000000.0
         self.et_array = np.array([700000000.0, 700001000.0])
         self.mock_time_scalar = Time("2022-03-20T12:00:00", format="isot")
+        
+        # Isolated sandbox folder for testing custom path discovery engine rules
+        self.test_dir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        # Clean up sandbox directory structure safely
+        if os.path.exists(self.test_dir):
+            shutil.rmtree(self.test_dir)
+
+    # ── NEW: Custom Path Infrastructure & Discovery Engine Architecture Tests ──
+
+    def test_discover_kernels_from_custom_root(self):
+        """Verify discover_kernels maps to explicit paths and obeys correct loading priority order."""
+        # Setup temporary directories mimicking generic and mission structures
+        generic_path = os.path.join(self.test_dir, "generic")
+        mission_path = os.path.join(self.test_dir, "mission")
+        os.makedirs(generic_path, exist_ok=True)
+        os.makedirs(mission_path, exist_ok=True)
+
+        # Pre-seed sample extensions out of sequence to ensure order resolution sorting logic holds
+        mock_spk = os.path.join(generic_path, "planets.bsp")
+        mock_lsk = os.path.join(generic_path, "leapseconds.tls")
+        mock_pck = os.path.join(generic_path, "constants.tpc")
+        mock_sc = os.path.join(mission_path, "spacecraft.bc")
+
+        for fpath in [mock_spk, mock_lsk, mock_pck, mock_sc]:
+            with open(fpath, "w") as f:
+                f.write("mock content")
+
+        # Execute discovery pointing explicitly to our sandbox location
+        resolved_sequence = su.discover_kernels(custom_root=self.test_dir)
+
+        # Verify strict structural operational loading priority index tracking logic:
+        # Expected sequence rules order: 1st LSK (.tls) -> 2nd Meta (.tpc) -> 3rd SPK (.bsp) -> 4th Mission (.bc)
+        self.assertEqual(len(resolved_sequence), 4)
+        self.assertEqual(resolved_sequence[0], mock_lsk)
+        self.assertEqual(resolved_sequence[1], mock_pck)
+        self.assertEqual(resolved_sequence[2], mock_spk)
+        self.assertEqual(resolved_sequence[3], mock_sc)
+
+    @patch("spiceypy.furnsh")
+    def test_load_kernels_raises_exception_on_empty_custom_dir(self, mock_furnsh):
+        """Verify load_kernels explicitly triggers FileNotFoundError if an empty workspace is supplied."""
+        with self.assertRaises(FileNotFoundError) as context:
+            su.load_kernels(custom_dir=self.test_dir)
+        
+        # Verify custom path string boundary indicators exist in the thrown exception error trace messages
+        self.assertIn(self.test_dir, str(context.exception))
+
+    # ── Existing Geometry Engine & Core Core Analytical Pipelines ──
 
     @patch("spiceypy.utc2et")
     def test_time_chronology_conversion(self, mock_utc2et):
@@ -47,7 +99,6 @@ class TestSpiceUtilsRigorous(unittest.TestCase):
     @patch("spiceypy.spkpos")
     def test_positions_and_apparent_vectors(self, mock_spkpos):
         """Verify vectorization of Sun positions, light-time lags, and Astropy unit mapping."""
-        # Mock returns: 3D position vector (km), light-time (seconds)
         mock_spkpos.return_value = (np.array([149000000.0, 0.0, 0.0]), 499.0)
         
         # 1. Scalar Run
@@ -95,7 +146,6 @@ class TestSpiceUtilsRigorous(unittest.TestCase):
     @patch("spiceypy.trgsep")
     def test_angular_separation_and_range_rate(self, mock_trgsep):
         """Verify angular separation computation between targets (trgsep_c functionality)."""
-        # trgsep returns radians; let's mock 0.5 radians
         mock_trgsep.return_value = 0.5
         
         sep = su.angular_separation("MOON", "SUN", "EARTH", self.et_scalar)
@@ -136,7 +186,6 @@ class TestSpiceUtilsRigorous(unittest.TestCase):
         """Verify instrument platform orientation matrix harvesting from CK buffers (ckgp_c)."""
         mock_matrix = np.eye(3)
         
-        # PROVIDE 4 VALUES: 2 for the successful call, 2 for the exception test call
         mock_sce2c.side_effect = [1000000.0, 1000080.0, 1000000.0, 1000080.0]  
         mock_ckgp.return_value = (mock_matrix, 0.0)
         
@@ -155,14 +204,13 @@ class TestSpiceUtilsRigorous(unittest.TestCase):
         """Verify primary ilumin_c engine calculations (Phase, Solar Incidence, Emission)."""
         mock_bodvrd.return_value = (3, np.array([3396.0, 3396.0, 3376.0]))
         mock_georec.return_value = np.array([3390.0, 0.0, 0.0])
-        # Return: trgsep, srfpt, phase, solar_inc, emission (all in radians)
         mock_ilumin.return_value = (None, None, 0.1, 0.5, 0.2)
         
         angles = su.get_surface_illumination("MARS", self.et_scalar, lat=15.0, lon=45.0)
         self.assertEqual(angles.unit, u.deg)
-        self.assertAlmostEqual(angles.value[0], np.degrees(0.1)) # Phase
-        self.assertAlmostEqual(angles.value[1], np.degrees(0.5)) # Solar Incidence
-        self.assertAlmostEqual(angles.value[2], np.degrees(0.2)) # Emission
+        self.assertAlmostEqual(angles.value[0], np.degrees(0.1)) 
+        self.assertAlmostEqual(angles.value[1], np.degrees(0.5)) 
+        self.assertAlmostEqual(angles.value[2], np.degrees(0.2)) 
 
     @patch("spiceypy.bodn2c")
     @patch("spiceypy.getfov")
@@ -170,9 +218,7 @@ class TestSpiceUtilsRigorous(unittest.TestCase):
     def test_instrument_fov_boresight_and_surface_intercept(self, mock_sincpt, mock_getfov, mock_bodn2c):
         """Verify ray-surface terrain footprint intercepts (sincpt_c / getfov_c)."""
         mock_bodn2c.return_value = -94001
-        # getfov specs matched to exact spiceypy order: shape, frame, bsight, nbounds, bounds
         mock_getfov.return_value = ("RECTANGLE", "MRO_CRISM", np.array([0.0, 0.0, 1.0]), 1, np.array([[0.0, 0.0, 1.0]]))
-        # sincpt specs: surface point, epoch, vector, found flag
         mock_sincpt.return_value = (np.array([3380.0, 10.0, 5.0]), 700000000.0, np.array([0.0, 0.0, -1.0]), True)
         
         pt, found = su.get_fov_intercept("MRO_CRISM", "MARS", self.et_scalar, "MRO_SPACECRAFT")
@@ -180,11 +226,9 @@ class TestSpiceUtilsRigorous(unittest.TestCase):
         self.assertTrue(found)
         np.testing.assert_array_equal(pt.value, [3380.0, 10.0, 5.0])
 
-
     @patch("spiceypy.occult")
     def test_geometric_occultation_state(self, mock_occult):
         """Verify tracking of line-of-sight occultation and eclipse conditions (occult_c)."""
-        # 1 = Total occultation, 0 = No occultation, etc.
         mock_occult.return_value = 1
         
         code = su.check_occultation("MOON", "ELLIPSOID", "SUN", "ELLIPSOID", "EARTH", self.et_scalar)

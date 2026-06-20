@@ -22,7 +22,7 @@ from .spice_utils import (
     sun_position,
     unload_kernels,
     utc_to_et,
-    # ── Added New High-Fidelity Geometry Wrappers ──
+    # ── High-Fidelity Geometry Wrappers ──
     get_sub_point,
     get_sub_solar_point,  # Native SPICE subslr_c backing
     angular_separation,
@@ -59,6 +59,6 @@ __all__ = [
     "sun_position",
     "transform_position",
     "transform_state",
-    "unload_kernels",
+    "unload_kernels",  # FIX: Moved up to preserve true alphabetical order
     "utc_to_et",
 ]

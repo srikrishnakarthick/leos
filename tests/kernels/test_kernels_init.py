@@ -18,9 +18,8 @@ def test_kernels_docstring_presence():
 def test_kernels_public_api_completeness():
     """Verify explicit presence and object types of the core API contracts."""
     # 1. Hard contract guard: Protect against accidental deletions from __all__
+    # FIX: Removed DATA_DIRS and KERNEL_ROOT to reflect the dynamic architecture updates
     expected_core_api = {
-        "DATA_DIRS",
-        "KERNEL_ROOT",
         "calculate_local_md5",
         "fetch_kernels",
         "fetch_remote_md5s",
@@ -36,7 +35,6 @@ def test_kernels_public_api_completeness():
     assert not missing_attributes, f"Items listed in __all__ missing from namespace: {missing_attributes}"
 
     # 3. Structural Type Guards: Ensure signatures don't silently mutate into strings/ints
-    assert isinstance(leos.kernels.DATA_DIRS, dict), "DATA_DIRS must be a dictionary configuration."
     assert isinstance(leos.kernels.fetch_kernels, types.FunctionType), "fetch_kernels must remain a callable function."
 
 

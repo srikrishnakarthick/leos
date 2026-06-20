@@ -1,7 +1,7 @@
 import os
 import hashlib
 import requests
-
+from pathlib import Path
 # ── Dynamic Ephemeris Configuration ──────────────────────────────────────────
 DE_VERSION = "de442"
 
@@ -55,8 +55,23 @@ def calculate_local_md5(filepath):
             hash_md5.update(chunk)
     return hash_md5.hexdigest()
 
-def fetch_kernels():
-    print("  Fetching live NAIF asset checksum tokens...")
+def fetch_kernels(target_dir=None):
+    """
+    Fetches missing planetary assets.
+    Creates directories automatically if they don't exist.
+    """
+    # ── THE COLAB/CUSTOM PATH FIX ──
+    # Resolve the root path dynamically based on runtime input
+    root_dir = os.path.abspath(target_dir) if target_dir else _DEFAULT_KERNEL_ROOT
+    generic_dir = os.path.join(root_dir, "generic")
+    mission_dir = os.path.join(root_dir, "mission")
+
+    # ── THE AUTO-CREATION FIX ──
+    # Ensure folders exist at runtime execution point
+    os.makedirs(generic_dir, exist_ok=True)
+    os.makedirs(mission_dir, exist_ok=True)
+
+    print(f"  Fetching live NAIF asset checksum tokens...")
     nasa_md5s = fetch_remote_md5s()
 
     # Build queue out of binary files, comments file, and static kernels
@@ -65,7 +80,7 @@ def fetch_kernels():
         queue[name] = url
 
     for filename, url in queue.items():
-        dest = os.path.join(DATA_DIRS["generic"], filename)
+        dest = os.path.join(generic_dir, filename)
         expected_md5 = nasa_md5s.get(filename.lower())
 
         if os.path.exists(dest):
@@ -74,7 +89,6 @@ def fetch_kernels():
                     print(f"  Verified & intact (via NAIF Manifest): {filename}")
                     continue
             else:
-                # Text/doc files might not be in aa_checksums.txt, verify via simple existence and content size
                 if os.path.getsize(dest) > 0:
                     print(f"  Verified via document footprint: {filename}")
                     continue

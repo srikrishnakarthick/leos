@@ -10,7 +10,6 @@ atmospheres, spectral sources, and advanced data ingestion engines.
 
 # 1. Structural Uncertainty Wrappers
 from .uncertainty import UncertainQuantity, propagate
-__all__ = ["UncertainQuantity", "propagate"]
 
 # 2. Central Units and Physical Constants
 from .units import (
@@ -43,9 +42,9 @@ from .Atmosphere.atmosphere_mars import AtmosphericColumnMars, MarsAtmosphericSo
 from .Atmosphere.atmosphere_moon import MoonSurfaceConditions, MoonAtmosphericSource, MOON_ATMO_REGISTRY
 
 # 5. Kernels Submodule Suite
+# FIX: Removed DATA_DIRS and KERNEL_ROOT imports
 from .kernels.fetch_kernels import (
-    fetch_remote_md5s, calculate_local_md5, get_dynamic_ephemeris_urls, fetch_kernels,
-    DATA_DIRS, KERNEL_ROOT
+    fetch_remote_md5s, calculate_local_md5, get_dynamic_ephemeris_urls, fetch_kernels
 )
 
 # 6. Spectrum Submodule Suite
@@ -55,7 +54,7 @@ from .Spectrum.spectral_sources import (
 )
 from .Spectrum.solar_spectrum import get_solar_spectrum
 
-# 7. SATIRE Ingestion Tools (Exposed from scripts/convert_satire.py)
+# 7. SATIRE Ingestion Tools
 from .scripts.convert_satire import (
     MASTER_WL,
     _to_master_grid,
@@ -67,7 +66,7 @@ from .scripts.convert_satire import (
     write_npz as write_satire_npz
 )
 
-# 8. MERRA-2 Reanalysis Ingestion Tools (Exposed from scripts/convert_merra2.py)
+# 8. MERRA-2 Reanalysis Ingestion Tools
 from .scripts.convert_merra2 import (
     extract_column as extract_merra2_column,
     write_npz as write_merra2_npz,
@@ -78,7 +77,7 @@ from .scripts.convert_merra2 import (
     _compute_sigma as _merra2_compute_sigma
 )
 
-# 9. MCD Web API Ingestion Tools (Exposed from scripts/convert_mcd_webapi.py)
+# 9. MCD Web API Ingestion Tools
 from .scripts.convert_mcd_webapi import (
     MCD_VARIABLES,
     _PRESSURE_LEVELS_PA as MCD_PRESSURE_LEVELS_PA,
@@ -90,7 +89,7 @@ from .scripts.convert_mcd_webapi import (
     generate_bundled_profiles as generate_mcd_bundled_profiles
 )
 
-# 10. LRO LOLA Lunar Topography Ingestion Tools (Exposed from scripts/convert_lola.py)
+# 10. LRO LOLA Lunar Topography Ingestion Tools
 from .scripts.convert_lola import (
     _R_MOON_KM,
     _detect_format as _detect_lola_format,
@@ -102,7 +101,7 @@ from .scripts.convert_lola import (
     write_npz as write_lola_npz
 )
 
-# 11. ERA5 Reanalysis Ingestion Tools (Exposed from scripts/convert_era5.py)
+# 11. ERA5 Reanalysis Ingestion Tools
 from .scripts.convert_era5 import (
     extract_column as extract_era5_column,
     write_npz as write_era5_npz,
@@ -124,13 +123,13 @@ __all__ = [
     "BOLTZMANN_CONSTANT",
     "COLUMN_DENSITY_UNIT",
     "COLUMN_MASS_UNIT",
-    "DATA_DIRS",                 
+    # FIX: Removed "DATA_DIRS" string entry
     "DISTANCE_UNIT",             
     "DOBSON_UNIT",
     "ELEVATION_UNIT",
     "Geometry",
     "IRRADIANCE_UNIT",
-    "KERNEL_ROOT",
+    # FIX: Removed "KERNEL_ROOT" string entry
     "MARS_ATMO_REGISTRY",
     "MASS_DENSITY_UNIT",
     "MASTER_WL",
@@ -209,6 +208,7 @@ __all__ = [
     "parse_satire_m",
     "parse_satire_s",
     "parse_satire_t",
+    "propagate",             # Added from Section 1 mapping requirements
     "solar_zenith_angle",
     "sources_valid_at",
     "subsolar_point",

@@ -15,15 +15,13 @@ fk = importlib.util.module_from_spec(spec)
 loader.exec_module(fk)
 
 class TestFetchKernelsPipeline(unittest.TestCase):
-    # Keep the rest of your TestFetchKernelsPipeline class code completely identical!
 
     def setUp(self):
         # Create an isolated temporary directory for every test run
         self.test_dir = tempfile.mkdtemp()
         
-        # FIX: Directly patch the dictionary that the script uses for routing files
-        self.saved_generic_dir = fk.DATA_DIRS["generic"]
-        fk.DATA_DIRS["generic"] = self.test_dir
+        # We now track the sub-paths explicitly to verify auto-generation
+        self.test_generic_dir = os.path.join(self.test_dir, "generic")
 
         self.dummy_content = b"Mock SPICE Data Footprint"
         self.valid_md5 = hashlib.md5(self.dummy_content).hexdigest()
@@ -40,12 +38,12 @@ class TestFetchKernelsPipeline(unittest.TestCase):
     def tearDown(self):
         # Safely sweep away the temporary testing environment
         shutil.rmtree(self.test_dir)
-        # FIX: Restore the original production environment directory configuration
-        fk.DATA_DIRS["generic"] = self.saved_generic_dir
 
     def helper_create_local_file(self, filename, content):
-        """Helper to inject controlled files into the sandboxed test workspace."""
-        filepath = os.path.join(self.test_dir, filename)
+        """Helper to inject controlled files into the sandboxed generic test workspace."""
+        # Ensure the generic subdirectory exists before pre-seeding
+        os.makedirs(self.test_generic_dir, exist_ok=True)
+        filepath = os.path.join(self.test_generic_dir, filename)
         with open(filepath, "wb") as f:
             f.write(content)
         return filepath
@@ -56,7 +54,7 @@ class TestFetchKernelsPipeline(unittest.TestCase):
         computed_hash = fk.calculate_local_md5(filepath)
         self.assertEqual(computed_hash, self.valid_md5)
 
-    @patch("leos.kernels.fetch_kernels.requests.get")
+    @patch.object(fk.requests, "get")  # FIX: Patch directly on the loaded module's namespace
     def test_fetch_kernels_cold_start(self, mock_get):
         """Scenario A: Verify complete sequential download and verification when directory is empty."""
         mock_manifest_resp = MagicMock()
@@ -70,7 +68,8 @@ class TestFetchKernelsPipeline(unittest.TestCase):
         # Chain behaviors for sequential requests.get calls
         mock_get.side_effect = [mock_manifest_resp] + [mock_file_resp] * 10
 
-        fk.fetch_kernels()
+        # Pass our custom test runner directory parameter explicitly
+        fk.fetch_kernels(target_dir=self.test_dir)
 
         # Check that files were created down in the sandboxed target path
         queue = fk.get_dynamic_ephemeris_urls()
@@ -78,9 +77,9 @@ class TestFetchKernelsPipeline(unittest.TestCase):
             queue[filename] = fk.STATIC_KERNELS[filename]
             
         for filename in queue.keys():
-            self.assertTrue(os.path.exists(os.path.join(self.test_dir, filename)))
+            self.assertTrue(os.path.exists(os.path.join(self.test_generic_dir, filename)))
 
-    @patch("leos.kernels.fetch_kernels.requests.get")
+    @patch.object(fk.requests, "get")
     def test_fetch_kernels_warm_start(self, mock_get):
         """Scenario B: Smart caching skip checks function properly when valid assets exist."""
         mock_manifest_resp = MagicMock()
@@ -95,12 +94,13 @@ class TestFetchKernelsPipeline(unittest.TestCase):
         for filename in queue.keys():
             self.helper_create_local_file(filename, self.dummy_content)
 
-        fk.fetch_kernels()
+        # Execute targeting our sandboxed path string
+        fk.fetch_kernels(target_dir=self.test_dir)
             
         # Caching check means get was only called ONCE total (manifest file lookup only)
         self.assertEqual(mock_get.call_count, 1)
 
-    @patch("leos.kernels.fetch_kernels.requests.get")
+    @patch.object(fk.requests, "get")
     def test_fetch_kernels_corruption_handling_and_recovery(self, mock_get):
         """Verify that a corrupted local file (MD5 mismatch) triggers a dynamic repair download."""
         mock_manifest_resp = MagicMock()
@@ -119,12 +119,12 @@ class TestFetchKernelsPipeline(unittest.TestCase):
         for filename in queue.keys():
             self.helper_create_local_file(filename, b"Corrupted Data")
 
-        fk.fetch_kernels()
+        fk.fetch_kernels(target_dir=self.test_dir)
         
         # Verify it went past the manifest to perform restorative downloads
         self.assertTrue(mock_get.call_count > 1)
 
-    @patch("leos.kernels.fetch_kernels.requests.get")
+    @patch.object(fk.requests, "get")
     def test_fetch_kernels_raises_value_error_on_bad_download(self, mock_get):
         """Ensure an explicit ValueError is raised if a download finishes but the hash is still wrong."""
         mock_manifest_resp = MagicMock()
@@ -137,7 +137,7 @@ class TestFetchKernelsPipeline(unittest.TestCase):
 
         # Force a failure because downloaded stream doesn't match the manifest expectations
         with self.assertRaises(ValueError):
-            fk.fetch_kernels()
+            fk.fetch_kernels(target_dir=self.test_dir)
 
 if __name__ == "__main__":
     unittest.main()

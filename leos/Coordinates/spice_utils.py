@@ -1,7 +1,7 @@
 import os
 from contextlib import contextmanager
 import numpy as np
-import spiceypy as spice
+import spiceypy as spice  # Restored to explicit 'spice' naming track
 from astropy.time import Time
 from astropy import units as u
 
@@ -11,11 +11,7 @@ _DEFAULT_KERNEL_ROOT = os.path.abspath(
 )
 
 def discover_kernels(custom_root=None):
-    """
-    Dynamically scans generic and mission directories to build a valid loading order.
-    Accepts an optional custom_root path string for external workspaces.
-    """
-    # Fall back to package internal root if no explicit path is passed
+    """Dynamically scans generic and mission directories to build a valid loading order."""
     base_root = os.path.abspath(custom_root) if custom_root else _DEFAULT_KERNEL_ROOT
     
     generic_dir = os.path.join(base_root, "generic")
@@ -23,11 +19,7 @@ def discover_kernels(custom_root=None):
     
     VALID_EXTENSIONS = ('.tls', '.tpc', '.tf', '.bsp', '.bc', '.bck', '.ti', '.tsc', '.bpc')
     
-    generic_buckets = {
-        "lsk": [],   
-        "meta": [],  
-        "spk": []    
-    }
+    generic_buckets = {"lsk": [], "meta": [], "spk": []}
     
     if os.path.exists(generic_dir):
         for f in os.listdir(generic_dir):
@@ -65,7 +57,6 @@ def discover_kernels(custom_root=None):
 def load_kernels(kernel_paths=None, extra_paths=None, custom_dir=None):
     """Loads default planetary assets, plus optional runtime-supplied IK/CK/SCLK paths."""
     if kernel_paths is None:
-        # Pass the custom directory down to the scanner pipeline
         kernel_paths = discover_kernels(custom_root=custom_dir)
         if not kernel_paths and not extra_paths:
             target_display_path = custom_dir if custom_dir else _DEFAULT_KERNEL_ROOT
@@ -85,7 +76,6 @@ def load_kernels(kernel_paths=None, extra_paths=None, custom_dir=None):
         if not os.path.exists(path):
             raise FileNotFoundError(f"Target kernel file path does not exist: {path}")
         spice.furnsh(path)
-
 
 def unload_kernels():
     """Clears the SPICE kernel pool completely to release system memory handles."""
@@ -127,7 +117,6 @@ def body_name_to_id(name):
     try:
         return int(spice.bodn2c(clean_name))
     except Exception as e:
-        # Intercept and convert to RuntimeError to hit our target shields safely
         raise RuntimeError(f"NAIF tracking ID not found for body or instrument: '{name}'") from e
 
 def body_radii(name):
@@ -256,8 +245,6 @@ def get_spacecraft_attitude(sc_id, instrument_id, et, reference_frame="J2000", t
     """Robust wrapper for CK attitude orientation matrix tracking extraction."""
     try:
         sclk_ticks = spice.sce2c(sc_id, et)
-        
-        # Calculate tick tolerance using delta ET
         ticks_plus_1 = spice.sce2c(sc_id, et + 1.0)
         ticks_per_second = abs(ticks_plus_1 - sclk_ticks)
         ticks_tolerance = ticks_per_second * tolerance_seconds
@@ -277,7 +264,10 @@ def get_spacecraft_attitude(sc_id, instrument_id, et, reference_frame="J2000", t
 # ── Illumination & Instrument FOV Intercepts ────────────────────────────────
 
 def get_surface_illumination(target, et, lat, lon, frame=None, method="ELLIPSOID"):
-    """Computes Phase, Solar Incidence, and Emission angles at an exact coordinate."""
+    """Computes Phase, Solar Incidence, and Emission angles at exact coordinates.
+    
+    Accepts arrays and scalars simultaneously for multi-dimensional profile tracking.
+    """
     clean_target = str(target).strip().upper()
     
     if frame is None:
@@ -287,19 +277,24 @@ def get_surface_illumination(target, et, lat, lon, frame=None, method="ELLIPSOID
     re, rp = radii[0], radii[2]
     f = (re - rp) / re
     
-    spoint = spice.georec(np.radians(lon), np.radians(lat), 0.0, re, f)
-    et_arr = np.asarray(et, dtype=float)
+    # ── Multi-Coordinate Array Broadcasting Engine ──
+    et_arr, lat_arr, lon_arr = np.broadcast_arrays(et, lat, lon)
+    out_shape = et_arr.shape
+    angles = np.empty(out_shape + (3,))
     
-    def _call(e):
-        _, _, phase, solar_inc, emission = spice.ilumin(method, clean_target, e, frame, "LT+S", "SUN", spoint)
-        return np.degrees([phase, solar_inc, emission])
-
-    if et_arr.ndim > 0:
-        angles = np.empty((et_arr.size, 3))
-        for i, e in enumerate(et_arr.flat):
-            angles[i] = _call(e)
-        return angles.reshape(et_arr.shape + (3,)) * u.deg
-    return _call(float(et)) * u.deg
+    for idx in np.ndindex(out_shape):
+        e_val = float(et_arr[idx])
+        lat_val = float(lat_arr[idx])
+        lon_val = float(lon_arr[idx])
+        
+        spoint = spice.georec(np.radians(lon_val), np.radians(lat_val), 0.0, re, f)
+        
+        _, _, phase, solar_inc, emission = spice.ilumin(
+            method, clean_target, e_val, frame, "LT+S", "SUN", spoint
+        )
+        angles[idx] = np.degrees([phase, solar_inc, emission])
+        
+    return angles * u.deg
 
 def get_fov_intercept(inst_name, target, et, inst_frame, method="ELLIPSOID"):
     """Calculates ray-surface terrain footprint intercepts for an instrument boresight."""
@@ -309,9 +304,7 @@ def get_fov_intercept(inst_name, target, et, inst_frame, method="ELLIPSOID"):
         boresight = bounds[0]
     except Exception as e:
         raise RuntimeError(
-            f"Failed to extract attitude matrix for instrument {inst_name}.\n"
-            f"Reason: Missing required CK (orientation), IK (instrument specs), or SCLK (clock) kernel.\n"
-            f"Please ensure all relevant mission kernels are supplied via extra_paths."
+            f"Failed to extract footprint context for instrument {inst_name}."
         ) from e
 
     et_arr = np.asarray(et, dtype=float)
@@ -327,8 +320,10 @@ def get_fov_intercept(inst_name, target, et, inst_frame, method="ELLIPSOID"):
                 pts[i] = [np.nan, np.nan, np.nan]
                 found_flags[i] = False
         return pts.reshape(et_arr.shape + (3,)) * u.km, found_flags.reshape(et_arr.shape)
+        
     spoint, _, _, found = spice.sincpt(method, target.upper(), float(et), frame, "LT+S", inst_name, inst_frame, boresight)
     return spoint * u.km, found
+
 # ── Geometric Events Search Subsystem ────────────────────────────────────────
 
 def check_occultation(target1, shape1, target2, shape2, observer, et, frame1=None, frame2=None):

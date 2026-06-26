@@ -34,6 +34,7 @@ from .Coordinates.spice_utils import (
 from .Coordinates.solar_geometry import (
     sun_body_distance, solar_zenith_angle, illumination_fraction, subsolar_point, toa_irradiance
 )
+import spiceypy as spice
 
 # 4. Atmosphere Submodule Suite (Multi-Planet Column Managers)
 from .Atmosphere.atmosphere import AtmosphericProfile
@@ -211,6 +212,7 @@ __all__ = [
     "propagate",             # Added from Section 1 mapping requirements
     "solar_zenith_angle",
     "sources_valid_at",
+    "spice",
     "subsolar_point",
     "sun_body_distance",
     "sun_position",

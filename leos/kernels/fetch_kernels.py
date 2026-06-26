@@ -7,15 +7,7 @@ DE_VERSION = "de442"
 
 # ── Updated Directory Architecture ──────────────────────────────────────────
 KERNEL_ROOT = os.path.join(os.path.dirname(__file__), "data")
-
-# Create dedicated subdirectories for pipeline sanitation
-DATA_DIRS = {
-    "generic": os.path.join(KERNEL_ROOT, "generic"),
-    "mission": os.path.join(KERNEL_ROOT, "mission")  # Playground for user CK/IK/SCLK files
-}
-
-for folder in DATA_DIRS.values():
-    os.makedirs(folder, exist_ok=True)
+_DEFAULT_KERNEL_ROOT = KERNEL_ROOT
 
 # Generic static text kernels
 STATIC_KERNELS = {

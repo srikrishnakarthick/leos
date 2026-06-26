@@ -263,7 +263,7 @@ def get_spacecraft_attitude(sc_id, instrument_id, et, reference_frame="J2000", t
 
 # ── Illumination & Instrument FOV Intercepts ────────────────────────────────
 
-def get_surface_illumination(target, et, lat, lon, frame=None, method="ELLIPSOID"):
+def get_surface_illumination(target, et, lat, lon, observer="SUN", frame=None, method="ELLIPSOID"):
     """Computes Phase, Solar Incidence, and Emission angles at exact coordinates.
     
     Accepts arrays and scalars simultaneously for multi-dimensional profile tracking.
@@ -290,8 +290,9 @@ def get_surface_illumination(target, et, lat, lon, frame=None, method="ELLIPSOID
         spoint = spice.georec(np.radians(lon_val), np.radians(lat_val), 0.0, re, f)
         
         _, _, phase, solar_inc, emission = spice.ilumin(
-            method, clean_target, e_val, frame, "LT+S", "SUN", spoint
+            method, clean_target, e_val, frame, "LT+S", observer.upper(), spoint
         )
+
         angles[idx] = np.degrees([phase, solar_inc, emission])
         
     return angles * u.deg
@@ -300,8 +301,6 @@ def get_fov_intercept(inst_name, target, et, inst_frame, method="ELLIPSOID"):
     """Calculates ray-surface terrain footprint intercepts for an instrument boresight."""
     try:
         shape, frame, boresight, nbounds, bounds = spice.getfov(body_name_to_id(inst_name), 3)
-    except Exception as e:
-        boresight = bounds[0]
     except Exception as e:
         raise RuntimeError(
             f"Failed to extract footprint context for instrument {inst_name}."

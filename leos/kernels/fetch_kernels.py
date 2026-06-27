@@ -40,9 +40,9 @@ _CHECKSUM_MANIFEST_URL = {
 
 # ── Common Kernels (always fetched, body-independent) ───────────────────────
 COMMON_KERNELS = [
-    ("naif0012.tls", "lsk"),
-    ("pck00011.tpc", "pck"),
-    ("de442.bsp", "spk_planets"),
+    ("naif0012.tls", "lsk", None, None),
+    ("pck00011.tpc", "pck", None, None),
+    ("de442.bsp", "spk_planets", "1549-12-31", "2650-01-25"),
 ]
 
 # ── Body Kernel Registry ────────
@@ -218,6 +218,46 @@ def _window_contains(req_lo, req_hi, cov_start, cov_end):
     return True
 
 
+def _select_time_filtered_kernels(entries, time=None, time_range=None, context_label=""):
+    """
+    entries: iterable of (filename, subdir, cov_start, cov_end).
+    Entries with cov_start=cov_end=None are always included.
+    Entries with a real window are included only if it contains the
+    requested time/time_range. Raises if at least one bounded entry
+    exists but NONE of them match a specified request -- unbounded
+    entries matching doesn't count, since they don't claim any
+    particular validity period in the first place.
+    """
+    req_lo, req_hi = _normalize_window(time, time_range)
+
+    selected = []
+    has_bounded = False
+    bounded_matched = False
+
+    for fname, subdir, cov_start, cov_end in entries:
+        if cov_start is None and cov_end is None:
+            selected.append((fname, subdir))
+            continue
+
+        has_bounded = True
+        if req_lo is None and req_hi is None:
+            selected.append((fname, subdir))
+            bounded_matched = True
+            continue
+
+        if _window_contains(req_lo, req_hi, cov_start, cov_end):
+            selected.append((fname, subdir))
+            bounded_matched = True
+
+    if has_bounded and not bounded_matched and (req_lo is not None or req_hi is not None):
+        raise ValueError(
+            f"No registered kernel{' for ' + context_label if context_label else ''} "
+            f"covers the requested time window ({req_lo}, {req_hi}). "
+            f"Check the kernel registry or widen the request."
+        )
+    return selected
+
+
 def _select_body_kernels(body, time=None, time_range=None):
     clean_body = body.strip().upper()
     if clean_body not in BODY_KERNELS:
@@ -225,25 +265,17 @@ def _select_body_kernels(body, time=None, time_range=None):
             f"No registered kernel set for body '{body}'. "
             f"Known bodies: {sorted(BODY_KERNELS.keys())}."
         )
+    return _select_time_filtered_kernels(
+        BODY_KERNELS[clean_body], time=time, time_range=time_range,
+        context_label=f"'{body}'",
+    )
 
-    entries = BODY_KERNELS[clean_body]
-    req_lo, req_hi = _normalize_window(time, time_range)
 
-    if req_lo is None and req_hi is None:
-        return [(fn, sub) for (fn, sub, _, _) in entries]
-
-    selected = []
-    for fname, subdir, cov_start, cov_end in entries:
-        if _window_contains(req_lo, req_hi, cov_start, cov_end):
-            selected.append((fname, subdir))
-
-    has_time_bounded_entries = any(cov_start or cov_end for (_, _, cov_start, cov_end) in entries)
-    if not selected and has_time_bounded_entries:
-        raise ValueError(
-            f"No registered kernel for '{body}' covers the requested time window "
-            f"({req_lo}, {req_hi}). Check BODY_KERNELS or widen the request."
-        )
-    return selected
+def _select_common_kernels(time=None, time_range=None):
+    return _select_time_filtered_kernels(
+        COMMON_KERNELS, time=time, time_range=time_range,
+        context_label="the common kernel set",
+    )
 
 
 # ── Dynamic moon-kernel resolver ─────────────────────────────────────────────
@@ -478,9 +510,8 @@ def get_dynamic_ephemeris_urls(body=None, mission=None, filenames=None,
 
     if body:
         clean_body = body.strip().upper() if isinstance(body, str) else str(body)
-        for fname, subdir in COMMON_KERNELS:
+        for fname, subdir in _select_common_kernels(time=time, time_range=time_range):
             urls[fname] = _NAIF_BASE + _NAIF_SUBDIRS[subdir] + fname
-
         if clean_body in BODY_KERNELS:
             for fname, subdir in _select_body_kernels(body, time=time, time_range=time_range):
                 urls[fname] = _NAIF_BASE + _NAIF_SUBDIRS[subdir] + fname

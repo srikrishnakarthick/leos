@@ -396,6 +396,25 @@ def parse_kernel_comment(text, this_filename):
 
     return {"bodies": bodies, "coverage": (begin, end)}
 
+_AST_TF_RE = re.compile(
+    r"NAIF_BODY_NAME\s*\+=\s*\(\s*'(?:\d+\s+)?([^']+)'\s*\)\s*"
+    r"NAIF_BODY_CODE\s*\+=\s*\(\s*(\d+)\s*\)",
+    re.DOTALL,
+)
+
+def _parse_asteroid_tf(text):
+    """
+    Parse codes_300ast_20100725.tf and return {NORMALIZED_NAME: naif_id}.
+    Names in the file look like '1 CERES', '2 PALLAS', etc.
+    The leading minor-planet number is stripped so that both 'CERES' and
+    '1 CERES' resolve correctly.
+    """
+    bodies = {}
+    for name, code in _AST_TF_RE.findall(text):
+        # name here is already stripped of the leading digit by the regex
+        bodies[_normalize_name(name)] = int(code)
+    return bodies
+
 
 def _comment_cache_path(filename):
     os.makedirs(_CMT_CACHE_DIR, exist_ok=True)
@@ -428,6 +447,49 @@ def _fetch_comment_text(filename, subdir="spk_satellites", force=False):
     with open(cache_path, "w", encoding="utf-8") as f:
         f.write(text)
     return text
+
+def _fetch_asteroid_tf_text(force=False):
+    """
+    Fetch (and disk-cache) codes_300ast_20100725.tf, which contains
+    NAIF_BODY_NAME/CODE blocks for all 300 asteroids.  The .cmt for this
+    file has no body listing ('use BRIEF') -- the .tf does.
+    """
+    tf_name = "codes_300ast_20100725.tf"
+    cache_path = _comment_cache_path(tf_name)
+    if not force and os.path.exists(cache_path):
+        with open(cache_path, "r", encoding="utf-8", errors="replace") as f:
+            return f.read()
+
+    url = _NAIF_BASE + _NAIF_SUBDIRS["spk_asteroids"] + tf_name
+    try:
+        resp = requests.get(url, timeout=15)
+        resp.raise_for_status()
+        text = resp.text
+    except Exception as e:
+        print(f"Could not fetch asteroid TF ({e}); asteroid name lookup unavailable.")
+        text = ""
+
+    with open(cache_path, "w", encoding="utf-8") as f:
+        f.write(text)
+    return text
+
+
+_AST_TF_RE = re.compile(
+    r"NAIF_BODY_NAME\s*\+=\s*\(\s*'(?:\d+\s+)?([^']+)'\s*\)\s*"
+    r"NAIF_BODY_CODE\s*\+=\s*\(\s*(\d+)\s*\)",
+    re.DOTALL,
+)
+
+def _parse_asteroid_tf(text):
+    """
+    Parse codes_300ast_20100725.tf and return {NORMALIZED_NAME: naif_id}.
+    Names in the file look like '1 CERES', '2 PALLAS' -- the leading
+    minor-planet number is stripped so 'CERES' and '1 CERES' both resolve.
+    """
+    bodies = {}
+    for name, code in _AST_TF_RE.findall(text):
+        bodies[_normalize_name(name)] = int(code)
+    return bodies
 
 
 def resolve_moon_kernel(body, time=None, time_range=None, planet=None):
@@ -480,18 +542,15 @@ def resolve_moon_kernel(body, time=None, time_range=None, planet=None):
 
 def resolve_asteroid_kernel(body, time=None, time_range=None):
     """
-    Check whether `body` (an asteroid name like 'CERES', or a NAIF ID) is
-    one of the ~300 named asteroids on ASTEROID_KERNEL_FILE, and that the
+    Check whether `body` (an asteroid name like 'CERES', a prefixed name
+    like '1 CERES', a NAIF ID like 2000001, or a minor-planet number like 1)
+    is one of the ~300 named asteroids on ASTEROID_KERNEL_FILE, and that the
     file's validity window covers the requested time/time_range.
 
-    NOTE: name verification reuses parse_kernel_comment(), whose regexes
-    were written against the Jovian-moon ephemeris comment format and
-    are UNTESTED against an actual codes_300ast_20100725.cmt. If the
-    format differs this fails closed (raises "not found") rather than
-    matching the wrong thing -- but may need a dedicated regex once
-    checked against a real sample.
+    Body names are resolved via codes_300ast_20100725.tf (NAIF_BODY_NAME/CODE
+    blocks).  Numeric IDs skip the network call entirely.
 
-    Returns (filename, subdir) on success. Raises ValueError otherwise.
+    Returns (filename, subdir) on success.  Raises ValueError otherwise.
     """
     fname, subdir, cov_start, cov_end = ASTEROID_KERNEL_FILE
     req_lo, req_hi = _normalize_window(time, time_range)
@@ -502,24 +561,33 @@ def resolve_asteroid_kernel(body, time=None, time_range=None):
             f"({req_lo}, {req_hi})."
         )
 
-    text = _fetch_comment_text(fname, subdir=subdir)
-    if not text:
+    is_numeric = str(body).strip().lstrip("-").isdigit()
+
+    if is_numeric:
+        raw = int(str(body).strip())
+        naif_id = raw if raw > 1_000_000 else raw + 2_000_000
+        if 2_000_001 <= naif_id <= 2_000_300:
+            return fname, subdir
         raise ValueError(
-            f"Could not verify '{body}' is on {fname}: comment fetch failed."
+            f"NAIF ID {naif_id} is outside the range covered by {fname} "
+            f"(2000001–2000300)."
         )
 
-    parsed = parse_kernel_comment(text, fname)
-    is_numeric = str(body).strip().lstrip("-").isdigit()
-    if is_numeric:
-        hit = int(body) in parsed["bodies"].values()
-    else:
-        hit = _normalize_name(body) in parsed["bodies"]
-
-    if not hit:
+    text = _fetch_asteroid_tf_text()
+    if not text:
         raise ValueError(
-            f"'{body}' not found among the named bodies on {fname}. "
-            f"Either the name/ID is wrong, or it isn't one of the ~300 "
-            f"named asteroids covered by this file."
+            f"Could not verify '{body}' is on {fname}: .tf fetch failed."
+        )
+
+    bodies = _parse_asteroid_tf(text)
+    norm = _normalize_name(body)
+    norm_stripped = re.sub(r"^\d+", "", norm)   # '1CERES' -> 'CERES'
+
+    if norm not in bodies and norm_stripped not in bodies:
+        raise ValueError(
+            f"'{body}' not found among the named bodies in "
+            f"codes_300ast_20100725.tf. Either the name is wrong, or it "
+            f"isn't one of the ~300 named asteroids covered by this file."
         )
     return fname, subdir
 
@@ -607,19 +675,28 @@ def get_dynamic_ephemeris_urls(body=None, mission=None, filenames=None,
             urls[fname] = _NAIF_BASE + _NAIF_SUBDIRS[subdir] + fname
         else:
             moon_err = ast_err = None
-            try:
-                matches = resolve_moon_kernel(clean_body, time=time, time_range=time_range)
-                best_planet, best_fname = matches[0]
-                urls[best_fname] = _NAIF_BASE + _NAIF_SUBDIRS["spk_satellites"] + best_fname
-            except ValueError as e:
-                moon_err = e
-                try:
-                    fname, subdir = resolve_asteroid_kernel(clean_body, time=time, time_range=time_range)
-                    urls[fname] = _NAIF_BASE + _NAIF_SUBDIRS[subdir] + fname
-                except ValueError as e2:
-                    ast_err = e2
 
-            if moon_err is not None and ast_err is not None:
+            # Asteroid first: one cached .tf fetch vs. scanning dozens of moon
+            # .cmt files.  Unknown bodies fail fast here instead of hanging.
+            try:
+                fname, subdir = resolve_asteroid_kernel(
+                    clean_body, time=time, time_range=time_range
+                )
+                urls[fname] = _NAIF_BASE + _NAIF_SUBDIRS[subdir] + fname
+            except ValueError as e:
+                ast_err = e
+                try:
+                    matches = resolve_moon_kernel(
+                        clean_body, time=time, time_range=time_range
+                    )
+                    best_planet, best_fname = matches[0]
+                    urls[best_fname] = (
+                        _NAIF_BASE + _NAIF_SUBDIRS["spk_satellites"] + best_fname
+                    )
+                except ValueError as e2:
+                    moon_err = e2
+
+            if ast_err is not None and moon_err is not None:
                 raise ValueError(
                     f"Could not resolve body '{body}' against any registry "
                     f"(BODY_KERNELS, LAGRANGE_KERNELS, COMET_KERNELS, "
@@ -627,7 +704,6 @@ def get_dynamic_ephemeris_urls(body=None, mission=None, filenames=None,
                     f"  Moon-resolution attempt: {moon_err}\n"
                     f"  Asteroid-resolution attempt: {ast_err}"
                 )
-
     if mission:
         clean_mission = mission.strip().upper()
         if clean_mission not in MISSION_KERNELS:

@@ -1,5 +1,15 @@
+"""
+leos/kernels/fetch_kernels.py
+
+Generic SPICE kernel fetcher / resolver for the `leos` package.
+
+"""
+
 import os
+import re
+import json
 import hashlib
+import datetime
 import requests
 from pathlib import Path
 from astropy.time import Time
@@ -7,6 +17,7 @@ from astropy.time import Time
 # ── Directory Architecture ───────────────────────────────────────────────────
 KERNEL_ROOT = os.path.join(os.path.dirname(__file__), "data")
 _DEFAULT_KERNEL_ROOT = KERNEL_ROOT
+_CMT_CACHE_DIR = os.path.join(KERNEL_ROOT, "_cmt_cache")
 
 
 # ── NAIF Subdirectory Map ────────────────────────────────────────────────────
@@ -18,7 +29,14 @@ _NAIF_SUBDIRS = {
     "spk_planets": "spk/planets/",
     "spk_satellites": "spk/satellites/",
     "spk_asteroids": "spk/asteroids/",
+    "spk_comets": "spk/comets/", "spk_lagrange_point": "spk/lagrange_point/",
 }
+
+_CHECKSUM_MANIFEST_URL = {
+    subdir: _NAIF_BASE + path + "aa_checksums.txt"
+    for subdir, path in _NAIF_SUBDIRS.items()
+}
+
 
 # ── Common Kernels (always fetched, body-independent) ───────────────────────
 # de442.bsp covers Mercury..Pluto barycenters, Sun, Earth, and Moon
@@ -29,29 +47,28 @@ COMMON_KERNELS = [
     ("de442.bsp", "spk_planets"),
 ]
 
-# ── Body Kernel Registry ─────────────────────────────────────────────────────
+# ── Body Kernel Registry (small, closed sets -- fine to hand-curate) ────────
 # Each entry: (filename, subdir_key, coverage_start, coverage_end)
+# Earth/Moon/Mars/Phobos/Deimos each resolve to one or two files total, so
+# static entries here are low-maintenance and don't need the dynamic
+# resolver below. Everything with dozens-to-hundreds of moons (Jupiter,
+# Saturn, Uranus, Neptune) is handled dynamically instead -- see
+# PLANET_CANDIDATE_KERNELS / resolve_moon_kernel().
 BODY_KERNELS = {
     "EARTH": [
         # No additional kernels needed: de442.bsp (COMMON) + pck00011.tpc
         # (COMMON) fully cover Earth's translational state and orientation.
     ],
     "MOON": [
-        # Lunar orientation (PA frame) — verified coverage ~1550-2650,
-        # matching de442's span. Must be paired with its frame kernel.
         ("moon_pa_de440_200625.bpc", "pck", None, None),
         ("moon_de440_250416.tf", "fk_satellites", None, None),
     ],
     "MARS": [
         ("mars_iau2000_v1.tpc", "pck", None, None),
-        # Short-span file first (smaller download) — only valid 1995-2050
         ("mar099s.bsp", "spk_satellites", "1995-01-01", "2050-01-01"),
-        # Full-span fallback for anything outside that window
         ("mar099.bsp", "spk_satellites", "1600-01-01", "2600-01-02"),
     ],
     "PHOBOS": [
-        # Same SPK system as Mars: mar099/mar099s carries Phobos (401),
-        # Deimos (402), and Mars barycenter (499) together.
         ("mars_iau2000_v1.tpc", "pck", None, None),
         ("mar099s.bsp", "spk_satellites", "1995-01-01", "2050-01-01"),
         ("mar099.bsp", "spk_satellites", "1600-01-01", "2600-01-02"),
@@ -63,76 +80,66 @@ BODY_KERNELS = {
     ],
 }
 
-# ── Planetary System Groups ──────────────────────────────────────────────────
-# Each planet's major/named moons + the planet itself, keyed by file role.
-# A body may need MULTIPLE files (e.g. an outer Jovian moon needs jup347
-# AND de442 for context, but not jup365).
-PLANETARY_SYSTEM_KERNELS["JUPITER"] = {
-    "core": [("jup365.bsp", "spk_satellites", "1600-01-10", "2200-01-10")],  # Jupiter + 4 Galileans + 4 inner moons
-    "moons": {
-        "IO": [], "EUROPA": [], "GANYMEDE": [], "CALLISTO": [],
-        "AMALTHEA": [], "THEBE": [], "ADRASTEA": [], "METIS": [],
-        # jup347.bsp: NAIF IDs 506,507,510,513,517,519-545,547-550,551-572,55501-55526
-        "HIMALIA": [("jup347.bsp", "spk_satellites", "1799-12-21", "2200-01-10")],
-        "ELARA": [("jup347.bsp", "spk_satellites", "1799-12-21", "2200-01-10")],
-        "PASIPHAE": [("jup347.bsp", "spk_satellites", "1799-12-21", "2200-01-10")],
-        "SINOPE": [("jup347.bsp", "spk_satellites", "1799-12-21", "2200-01-10")],
-        "LYSITHEA": [("jup347.bsp", "spk_satellites", "1799-12-21", "2200-01-10")],
-        "CARME": [("jup347.bsp", "spk_satellites", "1799-12-21", "2200-01-10")],
-        "ANANKE": [("jup347.bsp", "spk_satellites", "1799-12-21", "2200-01-10")],
-        "LEDA": [("jup347.bsp", "spk_satellites", "1799-12-21", "2200-01-10")],
-        # ... (all other named irregulars in jup347's BODIES list follow the same entry)
-        # jup348.bsp: NAIF IDs 55527-55530 (newly named 2024-2025 discoveries)
-        # jup349.bsp: NAIF IDs 55531-55544 (newly named 2026 discoveries)
-        # These are provisional-designation moons unlikely to be queried by name yet.
-    },
 
-    "SATURN": {
-        "core": [("sat441.bsp", "spk_satellites", "1749-12-30", "2250-01-06")],
-        "moons": {
-            "MIMAS": [], "ENCELADUS": [], "TETHYS": [], "DIONE": [], "RHEA": [],
-            "TITAN": [], "HYPERION": [], "IAPETUS": [], "PHOEBE": [],
-            # small named moons needing sat415 in addition to sat441:
-            "JANUS":      [("sat415.bsp", "spk_satellites", "1949-12-26", "2050-01-10")],
-            "EPIMETHEUS": [("sat415.bsp", "spk_satellites", "1949-12-26", "2050-01-10")],
-            "PAN":        [("sat415.bsp", "spk_satellites", "1949-12-26", "2050-01-10")],
-            "DAPHNIS":    [("sat393_daphnis.bsp", "spk_satellites", "1949-12-26", "2050-01-10")],
-            # irregular moons in sat456/457/459 similarly...
-        },
-    },
-    "URANUS": {
-        "core": [],  # Uranus barycenter/planet itself comes from ura184_part-*
-        "moons": {
-            "ARIEL": [("ura184_part-3.bsp", "spk_satellites", "1600-01-04", "2399-12-17")],
-            "MIRANDA": [("ura184_part-3.bsp", "spk_satellites", "1600-01-04", "2399-12-17")],
-            "CORDELIA": [("ura184_part-1.bsp", "spk_satellites", "1900-01-01", "2100-01-24")],
-            "PUCK": [("ura184_part-2.bsp", "spk_satellites", "1900-01-01", "2100-01-24")],
-            # etc — each moon mapped to whichever ura184_part-N actually contains it
-        },
-    },
-    "NEPTUNE": {
-        "core": [("nep104.bsp", "spk_satellites", "1600-01-04", "2399-12-25")],  # Neptune + Halimede/Psamathe/Sao/Laomedeia/Neso
-        "moons": {
-            "TRITON": [],  # in nep104 already
-            "NEREID": [("nep105.bsp", "spk_satellites", "1600-01-04", "2400-01-02")],
-            "NAIAD": [], "THALASSA": [], "DESPINA": [], "GALATEA": [],
-            "LARISSA": [], "PROTEUS": [], "HIPPOCAMP": [],  # all in nep095, superseded by nep104 per body list
-            "HALIMEDE": [], "PSAMATHE": [], "SAO": [], "LAOMEDEIA": [], "NESO": [],  # in nep104
-        },
-    },
-    "PLUTO": {
-        "core": [("plu060.bsp", "spk_satellites", "1800-01-02", "2199-12-30")],
-        "moons": {
-            "CHARON": [], "NIX": [], "HYDRA": [], "KERBEROS": [], "STYX": [],
-        },
-    },
+# ── Giant-planet moon candidates (dynamically resolved -- see bottom) ──────
+# FIX: the old PLANETARY_SYSTEM_KERNELS dict was never initialized
+# (`PLANETARY_SYSTEM_KERNELS["JUPITER"] = {...}` with no prior
+# `PLANETARY_SYSTEM_KERNELS = {}` -> NameError on import) AND had
+# "SATURN"/"URANUS"/"NEPTUNE"/"PLUTO" nested *inside* the dict assigned to
+# the "JUPITER" key, instead of being siblings of "JUPITER" -- so even after
+# fixing the NameError, PLANETARY_SYSTEM_KERNELS["SATURN"] would have raised
+# KeyError; the real path was PLANETARY_SYSTEM_KERNELS["JUPITER"]["SATURN"].
+#
+# This replaces that whole hand-curated moon-by-moon structure with a flat
+# per-planet candidate-filename list. Update this list ONLY when NAIF ships
+# an entirely new filename (rare); you never need to add a moon name here.
+PLANET_CANDIDATE_KERNELS = {
+    "JUPITER": [
+        "jup365.bsp",       # core: Jupiter + 4 Galileans + 4 inner moons
+        "jup347.bsp",       # bulk of the named irregulars (~879 MB)
+        "jup348.bsp",       # 2024-2025 newly named irregulars
+        "jup349.bsp",       # 2026 newly named irregulars
+    ],
+    "SATURN": [
+        "sat441.bsp",           # core: Saturn + classical moons
+        "sat415.bsp",           # Janus, Epimetheus, Atlas, Prometheus, Pandora,
+                                 # Pan, Methone, Pallene, Anthe, Aegaeon
+        "sat393_daphnis.bsp",   # Daphnis only
+        "sat441xl_part-1.bsp",  # extended-coverage Saturn-only
+        "sat441xl_part-2.bsp",
+        "sat455.bsp", "sat456.bsp", "sat457.bsp", "sat459.bsp",  # provisional/
+                                 # named irregulars released in waves; expect
+                                 # NAIF to add sat460+ over time -- append here
+    ],
+    "URANUS": [
+        "ura184_part-1.bsp",    # Cordelia..Portia + Uranus
+        "ura184_part-2.bsp",    # Rosalind..S2025_u_1 + Uranus
+        "ura184_part-3.bsp",    # Ariel/Umbriel/Titania/Oberon/Miranda,
+                                 # Caliban..S2023_u1 + Uranus
+        "ura111xl-701.bsp", "ura111xl-702.bsp", "ura111xl-703.bsp",
+        "ura111xl-704.bsp", "ura111xl-705.bsp", "ura111xl-799.bsp",
+        "ura116xl.bsp",          # 30-kyr backups for the major moons + irregulars
+    ],
+    "NEPTUNE": [
+        "nep104.bsp",            # Triton + 5 named inner-ish moons + Neptune
+        "nep105.bsp",            # Nereid
+        "nep097.bsp", "nep097xl-801.bsp", "nep097xl-899.bsp",
+        "nep101xl.bsp", "nep101xl-802.bsp",
+    ],
+    "PLUTO": [
+        "plu060.bsp",            # Charon, Nix, Hydra, Kerberos, Styx + Pluto
+    ],
 }
 
-# ── Asteroids: shared multi-body file, looked up by name/ID, not per-file ───
-ASTEROID_KERNEL_FILE = ("codes_300ast_20100725.bsp", "spk_asteroids", "1799-12-30", "2199-12-13")
-ASTEROID_NAMES = {"CERES", "VESTA", "LUTETIA", "KLEOPATRA", "EROS", ...}  # from aa_summaries.txt
 
-# ── Lagrange points: one file per point, no time filtering needed (wide span) ─
+# ── Asteroids: one shared file covering ~300 named asteroids ────────────────
+# Since there's only ever ONE file to pick, there is no "which file"
+# decision to make dynamically the way there is for moons -- you always
+# fetch this same kernel. just always offer this file when an asteroid lookup is requested,
+# and let SPICE itself report "name not in this kernel" if it isn't.
+ASTEROID_KERNEL_FILE = ("codes_300ast_20100725.bsp", "spk_asteroids", "1799-12-30", "2199-12-13")
+
+# ── Lagrange points & comets: small, closed sets -- fine to hand-curate ────
 LAGRANGE_KERNELS = {
     "EARTH-MOON L1": ("L1_de441.bsp", "spk_lagrange_point", "1900-01-01", "2151-01-01"),
     "EARTH-MOON L2": ("L2_de441.bsp", "spk_lagrange_point", "1900-01-01", "2151-01-01"),
@@ -143,40 +150,44 @@ LAGRANGE_KERNELS = {
 COMET_KERNELS = {
     "CHURYUMOV-GERASIMENKO": ("C_G_1000012_2012_2017.bsp", "spk_comets", "2012-01-01", "2017-01-01"),
     "ISON": ("ison.bsp", "spk_comets", "2012-01-01", "2014-01-02"),
-    # Two files both cover "Siding Spring" with different windows — keep both,
-    # priority order: wide-window first as primary, narrow as fallback isn't needed
-    # since c2013a1_s105_merged.bsp's window is a superset of siding_spring_8-19-14.bsp.
-    "SIDING SPRING": ("c2013a1_s105_merged.bsp", "spk_comets", None, None),  # effectively unbounded (3002 BC–2999 AD)
+    "SIDING SPRING": ("c2013a1_s105_merged.bsp", "spk_comets", None, None),
 }
 
-# ── Mission Kernel Registry (no time filtering — user assumed to know scope) ─
-# Each entry: (filename, url_or_subdir_key)
-# If the second element starts with "http", it's used as a direct full URL
-# (filename appended). Otherwise treated as a _NAIF_SUBDIRS key.
-#
-# VERIFY all URLs/filenames against each mission's actual NAIF kernel directory,
-# e.g. https://naif.jpl.nasa.gov/pub/naif/<MISSION>/kernels/
+
+# ── Mission Kernel Registry (no time filtering -- user assumed to know scope) ─
+# These are still placeholders/best-guesses, same as before. The dynamic
+# .cmt resolver doesn't help here because mission SPK directory layouts and
+# naming conventions vary mission-to-mission (unlike the generic_kernels
+# satellite tree, which is at least internally consistent). VERIFY each of
+# these against https://naif.jpl.nasa.gov/pub/naif/<MISSION>/kernels/spk/
+# before relying on them -- I have not been able to check any of them.
 MISSION_KERNELS = {
     "MAVEN": [
         ("maven_spacecraft.bsp", "https://naif.jpl.nasa.gov/pub/naif/MAVEN/kernels/spk/"),
         ("maven_sclk.tsc", "https://naif.jpl.nasa.gov/pub/naif/MAVEN/kernels/sclk/"),
     ],
     "MARS_EXPRESS": [
-        ("ORMF_______ .bsp".strip(), "https://naif.jpl.nasa.gov/pub/naif/MEX/kernels/spk/"),  # PLACEHOLDER — verify exact filename
+        # FIX: this was a syntax-valid but garbage placeholder filename
+        # ("ORMF_______ .bsp".strip() -> "ORMF_______ .bsp", still wrong).
+        # Left unresolved deliberately rather than guessing a real filename --
+        # a wrong guess here is worse than an obvious TODO, since it would
+        # 404 silently differently than this one always will.
+        # TODO: replace with verified filename from the MEX kernels/spk/ index.
     ],
     "MARS_RECON_ORBITER": [
-        ("mro_psp.bsp", "https://naif.jpl.nasa.gov/pub/naif/MRO/kernels/spk/"),  # PLACEHOLDER — verify
+        ("mro_psp.bsp", "https://naif.jpl.nasa.gov/pub/naif/MRO/kernels/spk/"),  # TODO verify
     ],
     "INSIGHT": [
-        ("insight_struct_v01.bsp", "https://naif.jpl.nasa.gov/pub/naif/InSight/kernels/spk/"),  # PLACEHOLDER — verify
+        ("insight_struct_v01.bsp", "https://naif.jpl.nasa.gov/pub/naif/InSight/kernels/spk/"),  # TODO verify
     ],
     "PERSEVERANCE": [
-        ("m2020_v04.bsp", "https://naif.jpl.nasa.gov/pub/naif/M2020/kernels/spk/"),  # PLACEHOLDER — verify
+        ("m2020_v04.bsp", "https://naif.jpl.nasa.gov/pub/naif/M2020/kernels/spk/"),  # TODO verify
     ],
     "CURIOSITY": [
-        ("msl_atls_ops_v03.bsp", "https://naif.jpl.nasa.gov/pub/naif/MSL/kernels/spk/"),  # PLACEHOLDER — verify
+        ("msl_atls_ops_v03.bsp", "https://naif.jpl.nasa.gov/pub/naif/MSL/kernels/spk/"),  # TODO verify
     ],
 }
+
 
 # ── Citation Tracking ────────────────────────────────────────────────────────
 CITATION_LOG = []  # list of dicts: {filename, url, context}
@@ -192,6 +203,7 @@ _SPICEYPY_CITATION = (
     "5(46), 2050. https://doi.org/10.21105/joss.02050"
 )
 
+
 def get_citations():
     """Returns the running list of kernel + toolkit citations accumulated this session."""
     return {
@@ -199,12 +211,15 @@ def get_citations():
         "toolkit": [_SPICE_CITATION, _SPICEYPY_CITATION],
     }
 
+
 def reset_citations():
     """Clears the citation log. Call at the start of a fresh analysis run if desired."""
     CITATION_LOG.clear()
 
+
 def _log_citation(filename, url, context):
     CITATION_LOG.append({"filename": filename, "url": url, "context": context})
+
 
 # ── Time Window Helpers ──────────────────────────────────────────────────────
 
@@ -214,6 +229,7 @@ def _to_time_or_none(value):
     if isinstance(value, Time):
         return value
     return Time(value)
+
 
 def _normalize_window(time=None, time_range=None):
     """Returns (lo, hi) as astropy Time or None, or (None, None) if no filtering requested."""
@@ -225,6 +241,7 @@ def _normalize_window(time=None, time_range=None):
     t = _to_time_or_none(time)
     return t, t
 
+
 def _window_contains(req_lo, req_hi, cov_start, cov_end):
     cov_start_t = _to_time_or_none(cov_start)
     cov_end_t = _to_time_or_none(cov_end)
@@ -233,6 +250,7 @@ def _window_contains(req_lo, req_hi, cov_start, cov_end):
     if cov_end_t is not None and req_hi is not None and req_hi > cov_end_t:
         return False
     return True
+
 
 def _select_body_kernels(body, time=None, time_range=None):
     clean_body = body.strip().upper()
@@ -253,8 +271,6 @@ def _select_body_kernels(body, time=None, time_range=None):
         if _window_contains(req_lo, req_hi, cov_start, cov_end):
             selected.append((fname, subdir))
 
-    # If nothing in BODY_KERNELS matched but the body has zero time-bounded
-    # entries at all (e.g. EARTH, which has no SPK rows), that's fine — return empty.
     has_time_bounded_entries = any(cov_start or cov_end for (_, _, cov_start, cov_end) in entries)
     if not selected and has_time_bounded_entries:
         raise ValueError(
@@ -262,6 +278,193 @@ def _select_body_kernels(body, time=None, time_range=None):
             f"({req_lo}, {req_hi}). Check BODY_KERNELS or widen the request."
         )
     return selected
+
+
+# ── Dynamic moon-kernel resolver ─────────────────────────────────────────────
+# This is the answer to "make Jupiter/Saturn/Uranus/Neptune's full moon
+# rosters work without hand-typing every name": instead of a static
+# name -> file table, fetch each candidate file's small .cmt comment text
+# and parse out (a) which body names/IDs it documents and (b) what overall
+# time span the *shipped* file covers, then pick whichever candidate(s)
+# actually contain the requested body and time.
+
+def _normalize_name(name):
+    """Uppercase and strip separators so 'S/2020_S_49', 'S2020_s_49', and
+    'S2020_s49' all compare equal -- NAIF is not consistent about this
+    across the FK name/ID blocks vs. the "Bodies on the File" tables."""
+    return re.sub(r"[^A-Z0-9]", "", str(name).upper())
+
+
+_BODY_TABLE_RE = re.compile(
+    r"^\s*([A-Za-z0-9_/]+)\s+(\d{2,6})\s+[\d.eE+\-]+\s+\d+\s+\d+\s+\S+",
+    re.MULTILINE,
+)
+
+_FK_NAME_CODE_RE = re.compile(
+    r"NAIF_BODY_NAME\s*\+=\s*\(\s*'([^']+)'\s*\)\s*"
+    r"NAIF_BODY_CODE\s*\+=\s*\(\s*(\d+)\s*\)",
+    re.DOTALL,
+)
+
+_TIMESPAN_LINE_RE = re.compile(
+    r"Timespan from JED\s+[\d.]+\(([\d\-A-Za-z]+)\)\s+to\s+JED\s+[\d.]+\(([\d\-A-Za-z]+)\)"
+)
+
+
+def _parse_paren_date(token):
+    """Parse a 'DD-MON-YYYY' style date as seen inside Timespan(...) parens."""
+    m = re.match(r"(\d{1,2})-([A-Za-z]{3})-(\d{1,5})", token.strip())
+    if not m:
+        return None
+    day, mon, year = m.groups()
+    try:
+        return Time(f"{int(year):04d}-{mon.title()}-{int(day):02d}", format="iso")
+    except Exception:
+        return None
+
+
+def _parse_naif_calendar(token):
+    """Parse a 'YYYY MON DD ...' style date as seen in BEGIN_TIME/END_TIME
+    lines. Treats anything tagged 'B.C.' as unbounded (returns None) since
+    those only appear in wide-open 30kyr backup files where exact bounding
+    doesn't matter for kernel *selection*."""
+    token = token.strip()
+    if "B.C." in token.upper():
+        return None
+    m = re.match(r"(\d{1,5})\s+([A-Za-z]{3})\s+(\d{1,2})", token)
+    if not m:
+        return None
+    year, mon, day = m.groups()
+    try:
+        return Time(f"{int(year):04d}-{mon.title()}-{int(day):02d}", format="iso")
+    except Exception:
+        return None
+
+
+def parse_kernel_comment(text, this_filename):
+    """
+    Parse a NAIF .cmt comment block and return:
+
+        {
+          "bodies": {NORMALIZED_NAME: naif_id, ...},
+          "coverage": (Time_or_None, Time_or_None),   # overall begin/end
+        }
+
+    Tolerant by design: NAIF's comment formatting differs kernel to kernel
+    (compare e.g. sat459's explicit FK name/ID block vs. ura184's plain
+    "Bodies on the File" name table), so every name/ID pair found by either
+    pattern is unioned together rather than assuming one canonical format.
+    """
+    bodies = {}
+
+    for name, code in _FK_NAME_CODE_RE.findall(text):
+        bodies[_normalize_name(name)] = int(code)
+
+    for name, code in _BODY_TABLE_RE.findall(text):
+        if name.upper() in ("NAME", "SYSTEM", "NUMBER"):
+            continue
+        bodies[_normalize_name(name)] = int(code)
+
+    begin = end = None
+    block_re = re.compile(
+        r"SPK_KERNEL\s*=\s*" + re.escape(this_filename) + r"\b.*?"
+        r"BEGIN_TIME\s*=\s*(.+?)\n.*?END_TIME\s*=\s*(.+?)\n",
+        re.DOTALL,
+    )
+    m = block_re.search(text)
+    if m:
+        begin = _parse_naif_calendar(m.group(1))
+        end = _parse_naif_calendar(m.group(2))
+    else:
+        m2 = _TIMESPAN_LINE_RE.search(text)
+        if m2:
+            begin = _parse_paren_date(m2.group(1))
+            end = _parse_paren_date(m2.group(2))
+
+    return {"bodies": bodies, "coverage": (begin, end)}
+
+
+def _comment_cache_path(filename):
+    os.makedirs(_CMT_CACHE_DIR, exist_ok=True)
+    return os.path.join(_CMT_CACHE_DIR, filename + ".cmt.txt")
+
+
+def _fetch_comment_text(filename, subdir="spk_satellites", force=False):
+    """
+    Fetch (and disk-cache) the small text comment for `filename` WITHOUT
+    downloading the multi-gigabyte binary kernel. Returns "" on any failure
+    (404, network error, etc.) so callers treat that candidate as simply
+    not matching, rather than crashing the whole resolution pass.
+    """
+    cache_path = _comment_cache_path(filename)
+    if not force and os.path.exists(cache_path):
+        with open(cache_path, "r", encoding="utf-8", errors="replace") as f:
+            return f.read()
+
+    cmt_name = re.sub(r"\.bsp$", ".cmt", filename)
+    url = _NAIF_BASE + _NAIF_SUBDIRS[subdir] + cmt_name
+    try:
+        resp = requests.get(url, timeout=15)
+        resp.raise_for_status()
+        text = resp.text
+    except Exception as e:
+        print(f"  ⚠️ Could not fetch comment for {filename} ({e}); "
+              f"skipping it as a candidate for this lookup.")
+        text = ""
+
+    with open(cache_path, "w", encoding="utf-8") as f:
+        f.write(text)
+    return text
+
+
+def resolve_moon_kernel(body, time=None, time_range=None, planet=None):
+    """
+    Dynamically determine which file(s) in PLANET_CANDIDATE_KERNELS contain
+    `body` (a moon name like "Himalia"/"S/2020 S 49", or a NAIF ID) and, if
+    given, cover the requested time/time_range.
+
+    Returns a list of (planet, filename) tuples, most-specific candidate
+    first (smaller/dedicated files are listed before big merged catalogs in
+    PLANET_CANDIDATE_KERNELS, and that ordering is preserved here).
+
+    Raises ValueError if nothing matches.
+    """
+    req_lo, req_hi = _normalize_window(time, time_range)
+    is_numeric = str(body).strip().lstrip("-").isdigit()
+    norm_body = None if is_numeric else _normalize_name(body)
+
+    planets_to_search = [planet.upper()] if planet else list(PLANET_CANDIDATE_KERNELS.keys())
+    matches = []
+
+    for pl in planets_to_search:
+        for fname in PLANET_CANDIDATE_KERNELS.get(pl, []):
+            text = _fetch_comment_text(fname)
+            if not text:
+                continue
+            parsed = parse_kernel_comment(text, fname)
+            if is_numeric:
+                hit = int(body) in parsed["bodies"].values()
+            else:
+                hit = norm_body in parsed["bodies"]
+            if not hit:
+                continue
+            begin, end = parsed["coverage"]
+            if _window_contains(req_lo, req_hi, begin, end):
+                matches.append((pl, fname))
+
+    if not matches:
+        raise ValueError(
+            f"Could not find a kernel covering body '{body}' "
+            f"{'for the requested time window ' if (req_lo or req_hi) else ''}"
+            f"across candidates for {planets_to_search}. Either the name is "
+            f"misspelled/mis-normalized, the .cmt fetch failed for the file "
+            f"that actually has it (see warnings above), or NAIF has released "
+            f"a new file that needs adding to PLANET_CANDIDATE_KERNELS."
+        )
+
+    matches.sort(key=lambda pf: PLANET_CANDIDATE_KERNELS[pf[0]].index(pf[1]))
+    return matches
+
 
 # ── URL Resolution ────────────────────────────────────────────────────────────
 
@@ -274,11 +477,14 @@ def _infer_subdir(filename):
     if fname.endswith(".bsp"):
         if fname.startswith("de"):
             return "spk_planets"
+        if fname.startswith(("l1_", "l2_", "l4_", "l5_")):
+            return "spk_lagrange_point"
         return "spk_satellites"
     raise ValueError(
         f"Cannot infer NAIF subdirectory for '{filename}'. "
         f"Pass an explicit URL via extra_urls instead."
     )
+
 
 def get_dynamic_ephemeris_urls(body=None, mission=None, filenames=None,
                                  time=None, time_range=None):
@@ -288,18 +494,20 @@ def get_dynamic_ephemeris_urls(body=None, mission=None, filenames=None,
     Parameters
     ----------
     body : str, optional
-        Body name (e.g. "MARS") — pulls COMMON_KERNELS + that body's
-        registered set from BODY_KERNELS, filtered by time/time_range if given.
+        A body name (e.g. "MARS", "EARTH", "MOON") that resolves through
+        the small static BODY_KERNELS table, OR a giant-planet moon name /
+        NAIF ID (e.g. "HIMALIA", "S/2020 S 49", 65297) that resolves
+        dynamically via resolve_moon_kernel().
     mission : str, optional
-        Mission name (e.g. "MAVEN") — pulls its registered set from
+        Mission name (e.g. "MAVEN") -- pulls its registered set from
         MISSION_KERNELS. No time filtering applied.
     filenames : str or list[str], optional
         Comma-separated string or list of explicit filenames to resolve
         (subdirectory inferred automatically).
     time : str or astropy.time.Time, optional
-        Single timestamp to filter body kernels against.
+        Single timestamp to filter body/moon kernels against.
     time_range : tuple, optional
-        (start, end) timestamps to filter body kernels against.
+        (start, end) timestamps to filter body/moon kernels against.
 
     Returns
     -------
@@ -309,10 +517,17 @@ def get_dynamic_ephemeris_urls(body=None, mission=None, filenames=None,
     urls = {}
 
     if body:
+        clean_body = body.strip().upper() if isinstance(body, str) else str(body)
         for fname, subdir in COMMON_KERNELS:
             urls[fname] = _NAIF_BASE + _NAIF_SUBDIRS[subdir] + fname
-        for fname, subdir in _select_body_kernels(body, time=time, time_range=time_range):
-            urls[fname] = _NAIF_BASE + _NAIF_SUBDIRS[subdir] + fname
+
+        if clean_body in BODY_KERNELS:
+            for fname, subdir in _select_body_kernels(body, time=time, time_range=time_range):
+                urls[fname] = _NAIF_BASE + _NAIF_SUBDIRS[subdir] + fname
+        else:
+            matches = resolve_moon_kernel(clean_body, time=time, time_range=time_range)
+            best_planet, best_fname = matches[0]
+            urls[best_fname] = _NAIF_BASE + _NAIF_SUBDIRS["spk_satellites"] + best_fname
 
     if mission:
         clean_mission = mission.strip().upper()
@@ -334,13 +549,20 @@ def get_dynamic_ephemeris_urls(body=None, mission=None, filenames=None,
             urls[fname] = _NAIF_BASE + _NAIF_SUBDIRS[_infer_subdir(fname)] + fname
 
     if not urls:
-        raise ValueError("Must supply at least one of: body, mission, filenames.")
+        raise ValueError("get_dynamic_ephemeris_urls() needs at least one of: body, mission, filenames.")
     return urls
+
 
 # ── Checksum Utilities ───────────────────────────────────────────────────────
 
-def fetch_remote_md5s():
-    checksum_url = "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/spk/planets/aa_checksums.txt"
+def fetch_remote_md5s(subdir="spk_satellites"):
+    """
+    FIX: this used to always hit spk/planets/aa_checksums.txt regardless of
+    what kind of kernel was being verified. Pass the subdir key matching
+    the kernel category you're about to download (e.g. "spk_satellites"
+    for moon kernels, "spk_planets" for de442.bsp, "pck"/"lsk" for those).
+    """
+    checksum_url = _CHECKSUM_MANIFEST_URL[subdir]
     md5_dict = {}
     try:
         response = requests.get(checksum_url, timeout=10)
@@ -351,8 +573,10 @@ def fetch_remote_md5s():
                 hash_val, filename = parts[0], parts[1]
                 md5_dict[filename.lower()] = hash_val.lower()
     except Exception as e:
-        print(f"  ⚠️ Warning: Could not fetch remote aa_checksums.txt ({e}).")
+        print(f"  ⚠️ Warning: Could not fetch remote aa_checksums.txt for "
+              f"'{subdir}' ({e}).")
     return md5_dict
+
 
 def calculate_local_md5(filepath):
     hash_md5 = hashlib.md5()
@@ -361,29 +585,23 @@ def calculate_local_md5(filepath):
             hash_md5.update(chunk)
     return hash_md5.hexdigest()
 
+
 # ── Main Fetch Routine ───────────────────────────────────────────────────────
+
+def _subdir_for(filename):
+    """Best-effort guess of which checksum manifest a filename belongs to,
+    used by fetch_kernels() when downloading a heterogeneous queue."""
+    try:
+        return _infer_subdir(filename)
+    except ValueError:
+        return "spk_satellites"
+
 
 def fetch_kernels(target_dir=None, body=None, mission=None, filenames=None,
                    time=None, time_range=None, extra_urls=None):
     """
     Fetches missing kernels for a body and/or mission and/or explicit filenames.
-
-    Parameters
-    ----------
-    target_dir : str, optional
-        Root directory to download into. Defaults to leos/kernels/data.
-    body : str, optional
-        Body name (e.g. "MARS").
-    mission : str, optional
-        Mission name (e.g. "MAVEN").
-    filenames : str or list[str], optional
-        Explicit comma-separated filenames.
-    time : str or astropy.time.Time, optional
-        Single timestamp, used to select the correct body SPK.
-    time_range : tuple, optional
-        (start, end) timestamps, used to select the correct body SPK.
-    extra_urls : dict[str, str], optional
-        filename -> full URL overrides for kernels not in any registry.
+    See get_dynamic_ephemeris_urls() for parameter semantics.
     """
     root_dir = os.path.abspath(target_dir) if target_dir else _DEFAULT_KERNEL_ROOT
     generic_dir = os.path.join(root_dir, "generic")
@@ -391,9 +609,6 @@ def fetch_kernels(target_dir=None, body=None, mission=None, filenames=None,
 
     os.makedirs(generic_dir, exist_ok=True)
     os.makedirs(mission_dir, exist_ok=True)
-
-    print("  Fetching live NAIF asset checksum tokens...")
-    nasa_md5s = fetch_remote_md5s()
 
     queue = {}
     if body or filenames:
@@ -414,10 +629,20 @@ def fetch_kernels(target_dir=None, body=None, mission=None, filenames=None,
 
     context_label = mission if mission else body
 
+    # FIX: one checksum manifest per kernel category instead of a single
+    # hardcoded planets/ URL. Fetched lazily/once per category actually
+    # needed for this call.
+    manifest_cache = {}
+
     for filename, url in queue.items():
         dest_dir = mission_dir if filename in mission_filenames else generic_dir
         dest = os.path.join(dest_dir, filename)
-        expected_md5 = nasa_md5s.get(filename.lower())
+
+        subdir_key = _subdir_for(filename)
+        if subdir_key not in manifest_cache:
+            print(f"  Fetching live NAIF asset checksum tokens for '{subdir_key}'...")
+            manifest_cache[subdir_key] = fetch_remote_md5s(subdir_key)
+        expected_md5 = manifest_cache[subdir_key].get(filename.lower())
 
         if os.path.exists(dest):
             if expected_md5:
@@ -446,5 +671,22 @@ def fetch_kernels(target_dir=None, body=None, mission=None, filenames=None,
 
 
 if __name__ == "__main__":
-    print("Initializing Generic SPICE Pipeline Asset Fetcher [Target: MARS]")
-    fetch_kernels(body="MARS", time="2026-06-27")
+    # Smoke test / manual run path. This block ONLY executes when you run
+    # `python fetch_kernels.py` directly -- it's skipped entirely when leos
+    # imports this module normally (e.g. from solar_geometry.py), so it has
+    # no effect on production import behavior.
+    #
+    # Why Mars specifically: it's the smallest registry entry with real
+    # time-window branching logic (mar099s.bsp for 1995-2050 vs. the much
+    # larger mar099.bsp outside that window), so running this script is a
+    # quick end-to-end check that (a) the URL resolver, (b) the time-window
+    # selection, and (c) the download+checksum pipeline all still work.
+    #
+    # FIX: the date used to be a hardcoded literal ("2026-06-27") rather
+    # than "whatever today happens to be," which would have quietly stopped
+    # being a useful smoke test once mar099s's 1995-2050 window made the
+    # hardcoded date pick the wrong file relative to "now." Using today's
+    # date keeps testing the time-window branch indefinitely.
+    today = datetime.date.today().isoformat()
+    print(f"Initializing Generic SPICE Pipeline Asset Fetcher [Target: MARS, time={today}]")
+    fetch_kernels(body="MARS", time=today)

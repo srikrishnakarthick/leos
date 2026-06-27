@@ -39,21 +39,13 @@ _CHECKSUM_MANIFEST_URL = {
 
 
 # ── Common Kernels (always fetched, body-independent) ───────────────────────
-# de442.bsp covers Mercury..Pluto barycenters, Sun, Earth, and Moon
-# translational state, span 1549-12-31 to 2650-01-25 (verified via brief).
 COMMON_KERNELS = [
     ("naif0012.tls", "lsk"),
     ("pck00011.tpc", "pck"),
     ("de442.bsp", "spk_planets"),
 ]
 
-# ── Body Kernel Registry (small, closed sets -- fine to hand-curate) ────────
-# Each entry: (filename, subdir_key, coverage_start, coverage_end)
-# Earth/Moon/Mars/Phobos/Deimos each resolve to one or two files total, so
-# static entries here are low-maintenance and don't need the dynamic
-# resolver below. Everything with dozens-to-hundreds of moons (Jupiter,
-# Saturn, Uranus, Neptune) is handled dynamically instead -- see
-# PLANET_CANDIDATE_KERNELS / resolve_moon_kernel().
+# ── Body Kernel Registry ────────
 BODY_KERNELS = {
     "EARTH": [
         # No additional kernels needed: de442.bsp (COMMON) + pck00011.tpc
@@ -81,18 +73,7 @@ BODY_KERNELS = {
 }
 
 
-# ── Giant-planet moon candidates (dynamically resolved -- see bottom) ──────
-# FIX: the old PLANETARY_SYSTEM_KERNELS dict was never initialized
-# (`PLANETARY_SYSTEM_KERNELS["JUPITER"] = {...}` with no prior
-# `PLANETARY_SYSTEM_KERNELS = {}` -> NameError on import) AND had
-# "SATURN"/"URANUS"/"NEPTUNE"/"PLUTO" nested *inside* the dict assigned to
-# the "JUPITER" key, instead of being siblings of "JUPITER" -- so even after
-# fixing the NameError, PLANETARY_SYSTEM_KERNELS["SATURN"] would have raised
-# KeyError; the real path was PLANETARY_SYSTEM_KERNELS["JUPITER"]["SATURN"].
-#
-# This replaces that whole hand-curated moon-by-moon structure with a flat
-# per-planet candidate-filename list. Update this list ONLY when NAIF ships
-# an entirely new filename (rare); you never need to add a moon name here.
+# ── Giant-planet moon candidates ──────
 PLANET_CANDIDATE_KERNELS = {
     "JUPITER": [
         "jup365.bsp",       # core: Jupiter + 4 Galileans + 4 inner moons
@@ -133,10 +114,6 @@ PLANET_CANDIDATE_KERNELS = {
 
 
 # ── Asteroids: one shared file covering ~300 named asteroids ────────────────
-# Since there's only ever ONE file to pick, there is no "which file"
-# decision to make dynamically the way there is for moons -- you always
-# fetch this same kernel. just always offer this file when an asteroid lookup is requested,
-# and let SPICE itself report "name not in this kernel" if it isn't.
 ASTEROID_KERNEL_FILE = ("codes_300ast_20100725.bsp", "spk_asteroids", "1799-12-30", "2199-12-13")
 
 # ── Lagrange points & comets: small, closed sets -- fine to hand-curate ────
@@ -155,24 +132,13 @@ COMET_KERNELS = {
 
 
 # ── Mission Kernel Registry (no time filtering -- user assumed to know scope) ─
-# These are still placeholders/best-guesses, same as before. The dynamic
-# .cmt resolver doesn't help here because mission SPK directory layouts and
-# naming conventions vary mission-to-mission (unlike the generic_kernels
-# satellite tree, which is at least internally consistent). VERIFY each of
-# these against https://naif.jpl.nasa.gov/pub/naif/<MISSION>/kernels/spk/
-# before relying on them -- I have not been able to check any of them.
 MISSION_KERNELS = {
     "MAVEN": [
         ("maven_spacecraft.bsp", "https://naif.jpl.nasa.gov/pub/naif/MAVEN/kernels/spk/"),
         ("maven_sclk.tsc", "https://naif.jpl.nasa.gov/pub/naif/MAVEN/kernels/sclk/"),
     ],
     "MARS_EXPRESS": [
-        # FIX: this was a syntax-valid but garbage placeholder filename
-        # ("ORMF_______ .bsp".strip() -> "ORMF_______ .bsp", still wrong).
-        # Left unresolved deliberately rather than guessing a real filename --
-        # a wrong guess here is worse than an obvious TODO, since it would
-        # 404 silently differently than this one always will.
-        # TODO: replace with verified filename from the MEX kernels/spk/ index.
+        
     ],
     "MARS_RECON_ORBITER": [
         ("mro_psp.bsp", "https://naif.jpl.nasa.gov/pub/naif/MRO/kernels/spk/"),  # TODO verify
@@ -281,12 +247,6 @@ def _select_body_kernels(body, time=None, time_range=None):
 
 
 # ── Dynamic moon-kernel resolver ─────────────────────────────────────────────
-# This is the answer to "make Jupiter/Saturn/Uranus/Neptune's full moon
-# rosters work without hand-typing every name": instead of a static
-# name -> file table, fetch each candidate file's small .cmt comment text
-# and parse out (a) which body names/IDs it documents and (b) what overall
-# time span the *shipped* file covers, then pick whichever candidate(s)
-# actually contain the requested body and time.
 
 def _normalize_name(name):
     """Uppercase and strip separators so 'S/2020_S_49', 'S2020_s_49', and
@@ -408,7 +368,7 @@ def _fetch_comment_text(filename, subdir="spk_satellites", force=False):
         resp.raise_for_status()
         text = resp.text
     except Exception as e:
-        print(f"  ⚠️ Could not fetch comment for {filename} ({e}); "
+        print(f"Could not fetch comment for {filename} ({e}); "
               f"skipping it as a candidate for this lookup.")
         text = ""
 
@@ -573,7 +533,7 @@ def fetch_remote_md5s(subdir="spk_satellites"):
                 hash_val, filename = parts[0], parts[1]
                 md5_dict[filename.lower()] = hash_val.lower()
     except Exception as e:
-        print(f"  ⚠️ Warning: Could not fetch remote aa_checksums.txt for "
+        print(f"Warning: Could not fetch remote aa_checksums.txt for "
               f"'{subdir}' ({e}).")
     return md5_dict
 
@@ -629,9 +589,6 @@ def fetch_kernels(target_dir=None, body=None, mission=None, filenames=None,
 
     context_label = mission if mission else body
 
-    # FIX: one checksum manifest per kernel category instead of a single
-    # hardcoded planets/ URL. Fetched lazily/once per category actually
-    # needed for this call.
     manifest_cache = {}
 
     for filename, url in queue.items():
@@ -671,22 +628,6 @@ def fetch_kernels(target_dir=None, body=None, mission=None, filenames=None,
 
 
 if __name__ == "__main__":
-    # Smoke test / manual run path. This block ONLY executes when you run
-    # `python fetch_kernels.py` directly -- it's skipped entirely when leos
-    # imports this module normally (e.g. from solar_geometry.py), so it has
-    # no effect on production import behavior.
-    #
-    # Why Mars specifically: it's the smallest registry entry with real
-    # time-window branching logic (mar099s.bsp for 1995-2050 vs. the much
-    # larger mar099.bsp outside that window), so running this script is a
-    # quick end-to-end check that (a) the URL resolver, (b) the time-window
-    # selection, and (c) the download+checksum pipeline all still work.
-    #
-    # FIX: the date used to be a hardcoded literal ("2026-06-27") rather
-    # than "whatever today happens to be," which would have quietly stopped
-    # being a useful smoke test once mar099s's 1995-2050 window made the
-    # hardcoded date pick the wrong file relative to "now." Using today's
-    # date keeps testing the time-window branch indefinitely.
     today = datetime.date.today().isoformat()
     print(f"Initializing Generic SPICE Pipeline Asset Fetcher [Target: MARS, time={today}]")
     fetch_kernels(body="MARS", time=today)

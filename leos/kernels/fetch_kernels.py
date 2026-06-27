@@ -25,13 +25,17 @@ _NAIF_BASE = "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/"
 _NAIF_SUBDIRS = {
     "lsk": "lsk/",
     "pck": "pck/",
+    "fk_planets": "fk/planets/",
     "fk_satellites": "fk/satellites/",
+    "fk_stations": "fk/stations/",
     "spk_planets": "spk/planets/",
     "spk_satellites": "spk/satellites/",
     "spk_asteroids": "spk/asteroids/",
-    "spk_comets": "spk/comets/", "spk_lagrange_point": "spk/lagrange_point/",
+    "spk_comets": "spk/comets/",
+    "spk_lagrange_point": "spk/lagrange_point/",
+    "spk_stations": "spk/stations/",
+    "spk_tno": "spk/tno/",
 }
-
 _CHECKSUM_MANIFEST_URL = {
     subdir: _NAIF_BASE + path + "aa_checksums.txt"
     for subdir, path in _NAIF_SUBDIRS.items()
@@ -277,6 +281,23 @@ def _select_common_kernels(time=None, time_range=None):
         context_label="the common kernel set",
     )
 
+def _select_named_static_kernel(entry, time=None, time_range=None, label=""):
+    """
+    entry: a (filename, subdir, cov_start, cov_end) tuple, e.g. a value
+    pulled from LAGRANGE_KERNELS or COMET_KERNELS. Returns
+    (filename, subdir) if the request falls within the kernel's
+    validity window; raises ValueError otherwise.
+    """
+    fname, subdir, cov_start, cov_end = entry
+    req_lo, req_hi = _normalize_window(time, time_range)
+    if not _window_contains(req_lo, req_hi, cov_start, cov_end):
+        label_suffix = f" ({label})" if label else ""
+        raise ValueError(
+            f"'{fname}'{label_suffix} does not cover the requested time "
+            f"window ({req_lo}, {req_hi})."
+        )
+    return fname, subdir
+
 
 # ── Dynamic moon-kernel resolver ─────────────────────────────────────────────
 
@@ -457,6 +478,51 @@ def resolve_moon_kernel(body, time=None, time_range=None, planet=None):
     matches.sort(key=lambda pf: PLANET_CANDIDATE_KERNELS[pf[0]].index(pf[1]))
     return matches
 
+def resolve_asteroid_kernel(body, time=None, time_range=None):
+    """
+    Check whether `body` (an asteroid name like 'CERES', or a NAIF ID) is
+    one of the ~300 named asteroids on ASTEROID_KERNEL_FILE, and that the
+    file's validity window covers the requested time/time_range.
+
+    NOTE: name verification reuses parse_kernel_comment(), whose regexes
+    were written against the Jovian-moon ephemeris comment format and
+    are UNTESTED against an actual codes_300ast_20100725.cmt. If the
+    format differs this fails closed (raises "not found") rather than
+    matching the wrong thing -- but may need a dedicated regex once
+    checked against a real sample.
+
+    Returns (filename, subdir) on success. Raises ValueError otherwise.
+    """
+    fname, subdir, cov_start, cov_end = ASTEROID_KERNEL_FILE
+    req_lo, req_hi = _normalize_window(time, time_range)
+
+    if not _window_contains(req_lo, req_hi, cov_start, cov_end):
+        raise ValueError(
+            f"'{fname}' does not cover the requested time window "
+            f"({req_lo}, {req_hi})."
+        )
+
+    text = _fetch_comment_text(fname, subdir=subdir)
+    if not text:
+        raise ValueError(
+            f"Could not verify '{body}' is on {fname}: comment fetch failed."
+        )
+
+    parsed = parse_kernel_comment(text, fname)
+    is_numeric = str(body).strip().lstrip("-").isdigit()
+    if is_numeric:
+        hit = int(body) in parsed["bodies"].values()
+    else:
+        hit = _normalize_name(body) in parsed["bodies"]
+
+    if not hit:
+        raise ValueError(
+            f"'{body}' not found among the named bodies on {fname}. "
+            f"Either the name/ID is wrong, or it isn't one of the ~300 "
+            f"named asteroids covered by this file."
+        )
+    return fname, subdir
+
 
 # ── URL Resolution ────────────────────────────────────────────────────────────
 
@@ -466,17 +532,30 @@ def _infer_subdir(filename):
         return "lsk"
     if fname.endswith(".tpc") or fname.endswith(".bpc"):
         return "pck"
+    if fname.endswith(".tf"):
+        raise ValueError(
+            f"Cannot infer NAIF subdirectory for frame kernel '{filename}' "
+            f"(could be fk/planets, fk/satellites, or fk/stations). "
+            f"Pass an explicit URL via extra_urls instead."
+        )
     if fname.endswith(".bsp"):
         if fname.startswith("de"):
             return "spk_planets"
         if fname.startswith(("l1_", "l2_", "l4_", "l5_")):
             return "spk_lagrange_point"
+        if fname.startswith("codes_"):
+            return "spk_asteroids"
+        if fname.startswith(("c_g_", "ison", "c2013", "siding_spring")):
+            return "spk_comets"
+        if fname.startswith("tnosat"):
+            return "spk_tno"
+        if fname.startswith(("dss_", "earthstns", "ndosl")):
+            return "spk_stations"
         return "spk_satellites"
     raise ValueError(
         f"Cannot infer NAIF subdirectory for '{filename}'. "
         f"Pass an explicit URL via extra_urls instead."
     )
-
 
 def get_dynamic_ephemeris_urls(body=None, mission=None, filenames=None,
                                  time=None, time_range=None):
@@ -512,13 +591,42 @@ def get_dynamic_ephemeris_urls(body=None, mission=None, filenames=None,
         clean_body = body.strip().upper() if isinstance(body, str) else str(body)
         for fname, subdir in _select_common_kernels(time=time, time_range=time_range):
             urls[fname] = _NAIF_BASE + _NAIF_SUBDIRS[subdir] + fname
+
         if clean_body in BODY_KERNELS:
             for fname, subdir in _select_body_kernels(body, time=time, time_range=time_range):
                 urls[fname] = _NAIF_BASE + _NAIF_SUBDIRS[subdir] + fname
+        elif clean_body in LAGRANGE_KERNELS:
+            fname, subdir = _select_named_static_kernel(
+                LAGRANGE_KERNELS[clean_body], time, time_range, clean_body
+            )
+            urls[fname] = _NAIF_BASE + _NAIF_SUBDIRS[subdir] + fname
+        elif clean_body in COMET_KERNELS:
+            fname, subdir = _select_named_static_kernel(
+                COMET_KERNELS[clean_body], time, time_range, clean_body
+            )
+            urls[fname] = _NAIF_BASE + _NAIF_SUBDIRS[subdir] + fname
         else:
-            matches = resolve_moon_kernel(clean_body, time=time, time_range=time_range)
-            best_planet, best_fname = matches[0]
-            urls[best_fname] = _NAIF_BASE + _NAIF_SUBDIRS["spk_satellites"] + best_fname
+            moon_err = ast_err = None
+            try:
+                matches = resolve_moon_kernel(clean_body, time=time, time_range=time_range)
+                best_planet, best_fname = matches[0]
+                urls[best_fname] = _NAIF_BASE + _NAIF_SUBDIRS["spk_satellites"] + best_fname
+            except ValueError as e:
+                moon_err = e
+                try:
+                    fname, subdir = resolve_asteroid_kernel(clean_body, time=time, time_range=time_range)
+                    urls[fname] = _NAIF_BASE + _NAIF_SUBDIRS[subdir] + fname
+                except ValueError as e2:
+                    ast_err = e2
+
+            if moon_err is not None and ast_err is not None:
+                raise ValueError(
+                    f"Could not resolve body '{body}' against any registry "
+                    f"(BODY_KERNELS, LAGRANGE_KERNELS, COMET_KERNELS, "
+                    f"PLANET_CANDIDATE_KERNELS, or ASTEROID_KERNEL_FILE).\n"
+                    f"  Moon-resolution attempt: {moon_err}\n"
+                    f"  Asteroid-resolution attempt: {ast_err}"
+                )
 
     if mission:
         clean_mission = mission.strip().upper()

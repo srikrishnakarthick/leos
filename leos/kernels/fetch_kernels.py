@@ -41,6 +41,14 @@ _CHECKSUM_MANIFEST_URL = {
     for subdir, path in _NAIF_SUBDIRS.items()
 }
 
+# ── Subdirs that actually publish aa_checksums.txt ───────────────────────────
+_SUBDIRS_WITH_CHECKSUMS = {
+    "spk_satellites",
+    "spk_planets",
+    "spk_lagrange_point",
+    "spk_asteroids",
+}
+
 
 # ── Common Kernels (always fetched, body-independent) ───────────────────────
 COMMON_KERNELS = [
@@ -811,10 +819,13 @@ def fetch_kernels(target_dir=None, body=None, mission=None, filenames=None,
         dest = os.path.join(dest_dir, filename)
 
         subdir_key = _subdir_for(filename)
-        if subdir_key not in manifest_cache:
-            print(f"  Fetching live NAIF asset checksum tokens for '{subdir_key}'...")
-            manifest_cache[subdir_key] = fetch_remote_md5s(subdir_key)
-        expected_md5 = manifest_cache[subdir_key].get(filename.lower())
+        if subdir_key in _SUBDIRS_WITH_CHECKSUMS:
+            if subdir_key not in manifest_cache:
+                print(f"  Fetching live NAIF asset checksum tokens for '{subdir_key}'...")
+                manifest_cache[subdir_key] = fetch_remote_md5s(subdir_key)
+            expected_md5 = manifest_cache[subdir_key].get(filename.lower())
+        else:
+            expected_md5 = None
 
         if os.path.exists(dest):
             if expected_md5:
@@ -835,14 +846,11 @@ def fetch_kernels(target_dir=None, body=None, mission=None, filenames=None,
             for chunk in response.iter_content(chunk_size=8192):
                 if chunk:
                     f.write(chunk)
-
-        if expected_md5 and calculate_local_md5(dest) != expected_md5:
-            raise ValueError(f"MD5 verification failure on newly downloaded asset: {filename}")
-        print(f"  Successfully verified and saved: {filename}")
+        
+        if expected_md5:
+            if calculate_local_md5(dest) != expected_md5:
+                raise ValueError(f"MD5 verification failure on newly downloaded asset: {filename}")
+            print(f"  Successfully verified and saved: {filename}")
+        else:
+            print(f"  Warning: no checksum available for '{filename}'; downloaded but unverified.")
         _log_citation(filename, url, context_label)
-
-
-if __name__ == "__main__":
-    today = datetime.date.today().isoformat()
-    print(f"Initializing Generic SPICE Pipeline Asset Fetcher [Target: MARS, time={today}]")
-    fetch_kernels(body="MARS", time=today)

@@ -25,6 +25,10 @@ from ._kernel_common import (
     _infer_subdir,
 )
 
+import calendar
+
+_MONTH_NUM = {abbr.upper(): i for i, abbr in enumerate(calendar.month_abbr) if abbr}
+
 # ── Common Kernels (always fetched, body-independent) ───────────────────────
 COMMON_KERNELS = [
     ("naif0012.tls", "lsk", None, None),
@@ -204,22 +208,20 @@ _TIMESPAN_LINE_RE = re.compile(
 
 
 def _parse_paren_date(token):
-    """Parse a 'DD-MON-YYYY' style date as seen inside Timespan(...) parens."""
     m = re.match(r"(\d{1,2})-([A-Za-z]{3})-(\d{1,5})", token.strip())
     if not m:
         return None
     day, mon, year = m.groups()
+    month_num = _MONTH_NUM.get(mon.upper())
+    if month_num is None:
+        return None
     try:
-        return Time(f"{int(year):04d}-{mon.title()}-{int(day):02d}", format="iso")
+        return Time(f"{int(year):04d}-{month_num:02d}-{int(day):02d}")
     except Exception:
         return None
 
 
 def _parse_naif_calendar(token):
-    """Parse a 'YYYY MON DD ...' style date as seen in BEGIN_TIME/END_TIME
-    lines. Treats anything tagged 'B.C.' as unbounded (returns None) since
-    those only appear in wide-open 30kyr backup files where exact bounding
-    doesn't matter for kernel *selection*."""
     token = token.strip()
     if "B.C." in token.upper():
         return None
@@ -227,11 +229,13 @@ def _parse_naif_calendar(token):
     if not m:
         return None
     year, mon, day = m.groups()
+    month_num = _MONTH_NUM.get(mon.upper())
+    if month_num is None:
+        return None
     try:
-        return Time(f"{int(year):04d}-{mon.title()}-{int(day):02d}", format="iso")
+        return Time(f"{int(year):04d}-{month_num:02d}-{int(day):02d}")
     except Exception:
         return None
-
 
 def parse_kernel_comment(text, this_filename):
     """

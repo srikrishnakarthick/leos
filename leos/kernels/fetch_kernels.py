@@ -1,8 +1,6 @@
 """
 leos/kernels/fetch_kernels.py
-
-Generic SPICE kernel fetcher / resolver for the `leos` package.
-
+SPICE kernel fetcher for the `leos` library.
 """
 
 import os
@@ -82,6 +80,14 @@ BODY_KERNELS = {
         ("mar099s.bsp", "spk_satellites", "1995-01-01", "2050-01-01"),
         ("mar099.bsp", "spk_satellites", "1600-01-01", "2600-01-02"),
     ],
+    "MERCURY": [
+    # de442.bsp (COMMON) fully covers Mercury's translational state.
+    # No moons. No orientation kernel in the generic set.
+    ],
+    "VENUS": [
+    # de442.bsp (COMMON) fully covers Venus's translational state.
+    # No moons. No orientation kernel in the generic set.
+    ],
 }
 
 
@@ -127,6 +133,12 @@ PLANET_CANDIDATE_KERNELS = {
 
 # ── Asteroids: one shared file covering ~300 named asteroids ────────────────
 ASTEROID_KERNEL_FILE = ("codes_300ast_20100725.bsp", "spk_asteroids", "1799-12-30", "2199-12-13")
+# Bodies NOT covered by any NAIF generic kernel and requiring an on-demand
+# JPL Horizons SPK request (https://ssd.jpl.nasa.gov/horizons/):
+#   - Small NEOs and quasi-satellites: 2002 VE68 (Zoozve), 2016 HO3 (Kamo'oalewa), etc.
+#   - Any asteroid outside the ~300 most massive named bodies above
+#   - Mission-specific small body targets not yet in a dedicated kernel
+# For these, use fetch_kernels(extra_urls={...}) with a Horizons-generated .bsp.
 
 # ── Lagrange points & comets: small, closed sets -- fine to hand-curate ────
 LAGRANGE_KERNELS = {
@@ -144,10 +156,153 @@ COMET_KERNELS = {
 
 
 # ── Mission Kernel Registry (no time filtering -- user assumed to know scope) ─
+
+# ── MAVEN kernel base URL ─────────────────────────────────────────────────────
+_MAVEN_BASE = "https://naif.jpl.nasa.gov/pub/naif/MAVEN/kernels/"
+
+# Static kernels: always load these (latest version of each) ──────────────────
+MAVEN_STATIC_KERNELS = [
+    # FK: latest frames kernel
+    ("maven_v12.tf",              _MAVEN_BASE + "fk/"),
+    # LSK: handled by COMMON_KERNELS (naif0012.tls) -- skip
+    # PCK: handled by COMMON_KERNELS (pck00011.tpc) -- skip
+    # Structure SPK
+    ("maven_struct_v12.bsp",      _MAVEN_BASE + "spk/"),
+]
+
+# Rolling reconstructed SPK (always up to date, covers full mission) ──────────
+MAVEN_RECONSTRUCTED_SPK = ("maven_orb_rec.bsp", _MAVEN_BASE + "spk/")
+
+# Predicted SPK (future coverage) ─────────────────────────────────────────────
+MAVEN_PREDICTED_SPK = ("maven_orb.bsp", _MAVEN_BASE + "spk/")
+
+# Background Mars + de421 needed by mission kernels (NAIF recommendation) ─────
+MAVEN_ANCILLARY_SPK = [
+    ("de421.bsp",    _MAVEN_BASE + "spk/"),
+    ("mar097s.bsp",  _MAVEN_BASE + "spk/"),
+]
+
+def resolve_maven_sclk():
+    """
+    Fetch the MAVEN sclk/ directory listing and return the filename of the
+    highest-numbered MVN_SCLKSCET .tsc file.  Falls back to a known-good
+    file if the listing fetch fails.
+    """
+    _FALLBACK = "MVN_SCLKSCET.00133.tsc"
+    try:
+        resp = requests.get(_MAVEN_BASE + "sclk/", timeout=10)
+        resp.raise_for_status()
+        matches = re.findall(r"MVN_SCLKSCET\.(\d{5})\.tsc", resp.text)
+        if not matches:
+            return _FALLBACK
+        latest = f"MVN_SCLKSCET.{max(matches)}.tsc"
+        return latest
+    except Exception as e:
+        print(f"Warning: could not fetch MAVEN SCLK listing ({e}); "
+              f"falling back to {_FALLBACK}")
+        return _FALLBACK
+
+_MAVEN_CK_DATE_RE = re.compile(
+    r"mvn_(sc|app)_rel_(\d{6})_(\d{6})_v\d+\.bc"
+)
+
+def _parse_maven_ck_date(token):
+    """Parse a YYMMDD string (e.g. '141013') into an astropy Time."""
+    try:
+        return Time(f"20{token[:2]}-{token[2:4]}-{token[4:6]}", format="iso")
+    except Exception:
+        return None
+
+def resolve_maven_ck(time=None, time_range=None, structure="sc"):
+    """
+    Return the list of MAVEN attitude CK filenames (mvn_sc_rel_* or
+    mvn_app_rel_*) whose coverage overlaps the requested time/time_range.
+
+    structure: 'sc' for spacecraft, 'app' for articulated payload platform.
+
+    Fetches the ck/ directory listing, filters by structure and coverage,
+    and returns filenames sorted oldest-first (so SPICE loads them in the
+    right priority order).
+
+    Falls back to the rolling maven_orb_rec.bsp approach (attitude-free)
+    if the listing fetch fails.
+    """
+    req_lo, req_hi = _normalize_window(time, time_range)
+
+    try:
+        resp = requests.get(_MAVEN_BASE + "ck/", timeout=15)
+        resp.raise_for_status()
+        listing = resp.text
+    except Exception as e:
+        print(f"Warning: could not fetch MAVEN CK listing ({e}); "
+              f"CK files will not be included.")
+        return []
+
+    candidates = []
+    for m in _MAVEN_CK_DATE_RE.finditer(listing):
+        str_type, start_str, end_str = m.group(1), m.group(2), m.group(3)
+        if str_type != structure:
+            continue
+        fname = m.group(0)
+        # skip archived files (old versions superseded by later ones)
+        if "archived" in fname:
+            continue
+        cov_start = _parse_maven_ck_date(start_str)
+        cov_end   = _parse_maven_ck_date(end_str)
+        if cov_start is None or cov_end is None:
+            continue
+        if _window_contains(req_lo, req_hi, cov_start, cov_end):
+            candidates.append((cov_start, fname))
+
+    # sort by coverage start date, oldest first
+    candidates.sort(key=lambda x: x[0].jd)
+    return [fname for _, fname in candidates]
+
+def get_maven_kernel_urls(time=None, time_range=None, include_ck=True):
+    """
+    Resolve all MAVEN kernel URLs for a given time or time_range.
+
+    Returns dict[filename -> URL].
+
+    Includes:
+      - Common kernels (naif0012.tls, pck00011.tpc, de442.bsp)
+      - MAVEN static kernels (FK, structure SPK)
+      - MAVEN ancillary SPK (de421, mar097s)
+      - Latest SCLK
+      - Reconstructed orbit SPK (maven_orb_rec.bsp)
+      - Weekly CK files covering the requested window (if include_ck=True)
+    """
+    urls = {}
+
+    # common kernels
+    for fname, subdir in _select_common_kernels(time=time, time_range=time_range):
+        urls[fname] = _NAIF_BASE + _NAIF_SUBDIRS[subdir] + fname
+
+    # MAVEN static: FK + structure SPK
+    for fname, base_url in MAVEN_STATIC_KERNELS:
+        urls[fname] = base_url + fname
+
+    # ancillary Mars/planetary SPK
+    for fname, base_url in MAVEN_ANCILLARY_SPK:
+        urls[fname] = base_url + fname
+
+    # latest SCLK
+    sclk_name = resolve_maven_sclk()
+    urls[sclk_name] = _MAVEN_BASE + "sclk/" + sclk_name
+
+    # reconstructed orbit SPK (rolling file, always current)
+    orb_fname, orb_url = MAVEN_RECONSTRUCTED_SPK
+    urls[orb_fname] = orb_url + orb_fname
+
+    # CK files
+    if include_ck and (time is not None or time_range is not None):
+        for ck_fname in resolve_maven_ck(time=time, time_range=time_range, structure="sc"):
+            urls[ck_fname] = _MAVEN_BASE + "ck/" + ck_fname
+
+    return urls
+
 MISSION_KERNELS = {
-    "MAVEN": [
-        ("maven_spacecraft.bsp", "https://naif.jpl.nasa.gov/pub/naif/MAVEN/kernels/spk/"),
-        ("maven_sclk.tsc", "https://naif.jpl.nasa.gov/pub/naif/MAVEN/kernels/sclk/"),
+    "MAVEN": [None # resolved dynamically via get_maven_kernel_urls()
     ],
     "MARS_EXPRESS": [
         
@@ -713,17 +868,24 @@ def get_dynamic_ephemeris_urls(body=None, mission=None, filenames=None,
                     f"  Asteroid-resolution attempt: {ast_err}"
                 )
     if mission:
-        clean_mission = mission.strip().upper()
-        if clean_mission not in MISSION_KERNELS:
-            raise ValueError(
-                f"No registered kernel set for mission '{mission}'. "
-                f"Known missions: {sorted(MISSION_KERNELS.keys())}."
-            )
+    clean_mission = mission.strip().upper()
+    if clean_mission not in MISSION_KERNELS:
+        raise ValueError(
+            f"No registered kernel set for mission '{mission}'. "
+            f"Known missions: {sorted(MISSION_KERNELS.keys())}."
+        )
+    if clean_mission == "MAVEN":
+        urls.update(get_maven_kernel_urls(time=time, time_range=time_range))
+    elif MISSION_KERNELS[clean_mission] is not None:
         for fname, loc in MISSION_KERNELS[clean_mission]:
             if loc.startswith("http"):
                 urls[fname] = loc + fname
             else:
                 urls[fname] = _NAIF_BASE + _NAIF_SUBDIRS[loc] + fname
+    else:
+        raise ValueError(
+            f"Mission '{mission}' has no kernel resolver implemented yet."
+        )
 
     if filenames:
         if isinstance(filenames, str):

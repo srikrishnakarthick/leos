@@ -302,8 +302,7 @@ def get_maven_kernel_urls(time=None, time_range=None, include_ck=True):
     return urls
 
 MISSION_KERNELS = {
-    "MAVEN": [None # resolved dynamically via get_maven_kernel_urls()
-    ],
+    "MAVEN": None, # resolved dynamically via get_maven_kernel_urls()
     "MARS_EXPRESS": [
         
     ],
@@ -558,25 +557,6 @@ def parse_kernel_comment(text, this_filename):
             end = _parse_paren_date(m2.group(2))
 
     return {"bodies": bodies, "coverage": (begin, end)}
-
-_AST_TF_RE = re.compile(
-    r"NAIF_BODY_NAME\s*\+=\s*\(\s*'(?:\d+\s+)?([^']+)'\s*\)\s*"
-    r"NAIF_BODY_CODE\s*\+=\s*\(\s*(\d+)\s*\)",
-    re.DOTALL,
-)
-
-def _parse_asteroid_tf(text):
-    """
-    Parse codes_300ast_20100725.tf and return {NORMALIZED_NAME: naif_id}.
-    Names in the file look like '1 CERES', '2 PALLAS', etc.
-    The leading minor-planet number is stripped so that both 'CERES' and
-    '1 CERES' resolve correctly.
-    """
-    bodies = {}
-    for name, code in _AST_TF_RE.findall(text):
-        # name here is already stripped of the leading digit by the regex
-        bodies[_normalize_name(name)] = int(code)
-    return bodies
 
 
 def _comment_cache_path(filename):
@@ -868,24 +848,24 @@ def get_dynamic_ephemeris_urls(body=None, mission=None, filenames=None,
                     f"  Asteroid-resolution attempt: {ast_err}"
                 )
     if mission:
-    clean_mission = mission.strip().upper()
-    if clean_mission not in MISSION_KERNELS:
-        raise ValueError(
-            f"No registered kernel set for mission '{mission}'. "
-            f"Known missions: {sorted(MISSION_KERNELS.keys())}."
-        )
-    if clean_mission == "MAVEN":
-        urls.update(get_maven_kernel_urls(time=time, time_range=time_range))
-    elif MISSION_KERNELS[clean_mission] is not None:
-        for fname, loc in MISSION_KERNELS[clean_mission]:
-            if loc.startswith("http"):
-                urls[fname] = loc + fname
-            else:
-                urls[fname] = _NAIF_BASE + _NAIF_SUBDIRS[loc] + fname
-    else:
-        raise ValueError(
-            f"Mission '{mission}' has no kernel resolver implemented yet."
-        )
+        clean_mission = mission.strip().upper()
+        if clean_mission not in MISSION_KERNELS:
+            raise ValueError(
+                f"No registered kernel set for mission '{mission}'. "
+                f"Known missions: {sorted(MISSION_KERNELS.keys())}."
+            )
+        if clean_mission == "MAVEN":
+            urls.update(get_maven_kernel_urls(time=time, time_range=time_range))
+        elif MISSION_KERNELS[clean_mission] is not None:
+            for fname, loc in MISSION_KERNELS[clean_mission]:
+                if loc.startswith("http"):
+                    urls[fname] = loc + fname
+                else:
+                    urls[fname] = _NAIF_BASE + _NAIF_SUBDIRS[loc] + fname
+        else:
+            raise ValueError(
+                f"Mission '{mission}' has no kernel resolver implemented yet."
+            )
 
     if filenames:
         if isinstance(filenames, str):

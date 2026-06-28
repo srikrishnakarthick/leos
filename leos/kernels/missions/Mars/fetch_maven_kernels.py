@@ -13,8 +13,8 @@ plain static (filename, base_url) lists.
 import re
 import requests
 
-from .. import _kernel_common as _kc
-from ..fetch_generic_kernels import select_common_kernels
+from ... import _kernel_common as _kc
+from ...fetch_generic_kernels import select_common_kernels
 
 # ── MAVEN kernel base URL ─────────────────────────────────────────────────────
 _MAVEN_BASE = "https://naif.jpl.nasa.gov/pub/naif/MAVEN/kernels/"

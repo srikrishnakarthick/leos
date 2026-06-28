@@ -17,12 +17,12 @@ import requests
 
 from . import _kernel_common as _kc
 from . import fetch_generic_kernels
-from .missions import fetch_maven_kernels
-from .missions import fetch_mars_express_kernels
-from .missions import fetch_mro_kernels
-from .missions import fetch_insight_kernels
-from .missions import fetch_perseverance_kernels
-from .missions import fetch_curiosity_kernels
+from .missions.Mars import fetch_maven_kernels
+from .missions.Mars import fetch_mars_express_kernels
+from .missions.Mars import fetch_mro_kernels
+from .missions.Mars import fetch_insight_kernels
+from .missions.Mars import fetch_perseverance_kernels
+from .missions.Mars import fetch_curiosity_kernels
 
 # ── Mission Resolver Registry ────────────────────────────────────────────────
 # Every entry maps a mission= string to a get_kernel_urls(time=, time_range=)

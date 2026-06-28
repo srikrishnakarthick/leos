@@ -12,6 +12,7 @@ MODULE_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../leo
 loader = importlib.machinery.SourceFileLoader("fetch_kernels_module", MODULE_PATH)
 spec = importlib.util.spec_from_loader("fetch_kernels_module", loader)
 fk = importlib.util.module_from_spec(spec)
+fk.__package__ = "leos.kernels"   # anchors relative imports (`.`, `..`) inside fetch_kernels.py
 loader.exec_module(fk)
 
 class TestFetchKernelsPipeline(unittest.TestCase):

@@ -15,12 +15,21 @@ fk = importlib.util.module_from_spec(spec)
 fk.__package__ = "leos.kernels"   # anchors relative imports (`.`, `..`) inside fetch_kernels.py
 loader.exec_module(fk)
 
+
 class TestFetchKernelsPipeline(unittest.TestCase):
+
+    # Explicit filename set replacing the now-removed fk.STATIC_KERNELS default.
+    # naif0012.tls / pck00011.tpc / mars_iau2000_v1.tpc live in subdirs ("lsk",
+    # "pck") that NAIF doesn't publish aa_checksums.txt for, so those three
+    # are verified via the "non-empty file already exists" footprint check.
+    # de442.bsp lives in "spk_planets", which DOES have a checksum manifest,
+    # so it's the one file in this set that gets real MD5 verification.
+    TEST_FILENAMES = ["naif0012.tls", "pck00011.tpc", "de442.bsp", "mars_iau2000_v1.tpc"]
 
     def setUp(self):
         # Create an isolated temporary directory for every test run
         self.test_dir = tempfile.mkdtemp()
-        
+
         # We now track the sub-paths explicitly to verify auto-generation
         self.test_generic_dir = os.path.join(self.test_dir, "generic")
 
@@ -61,7 +70,7 @@ class TestFetchKernelsPipeline(unittest.TestCase):
         mock_manifest_resp = MagicMock()
         mock_manifest_resp.text = self.mock_checksums_txt
         mock_manifest_resp.raise_for_status = MagicMock()
-        
+
         mock_file_resp = MagicMock()
         mock_file_resp.iter_content = lambda chunk_size: [self.dummy_content]
         mock_file_resp.raise_for_status = MagicMock()
@@ -70,13 +79,10 @@ class TestFetchKernelsPipeline(unittest.TestCase):
         mock_get.side_effect = [mock_manifest_resp] + [mock_file_resp] * 10
 
         # Pass our custom test runner directory parameter explicitly
-        fk.fetch_kernels(target_dir=self.test_dir)
+        fk.fetch_kernels(target_dir=self.test_dir, filenames=self.TEST_FILENAMES)
 
         # Check that files were created down in the sandboxed target path
-        queue = fk.get_dynamic_ephemeris_urls()
-        for filename in fk.STATIC_KERNELS.keys():
-            queue[filename] = fk.STATIC_KERNELS[filename]
-            
+        queue = fk.get_dynamic_ephemeris_urls(filenames=self.TEST_FILENAMES)
         for filename in queue.keys():
             self.assertTrue(os.path.exists(os.path.join(self.test_generic_dir, filename)))
 
@@ -88,17 +94,15 @@ class TestFetchKernelsPipeline(unittest.TestCase):
         mock_get.return_value = mock_manifest_resp
 
         # Pre-seed the sandboxed directory with correct intact assets
-        queue = fk.get_dynamic_ephemeris_urls()
-        for filename in fk.STATIC_KERNELS.keys():
-            queue[filename] = fk.STATIC_KERNELS[filename]
-            
+        queue = fk.get_dynamic_ephemeris_urls(filenames=self.TEST_FILENAMES)
         for filename in queue.keys():
             self.helper_create_local_file(filename, self.dummy_content)
 
         # Execute targeting our sandboxed path string
-        fk.fetch_kernels(target_dir=self.test_dir)
-            
-        # Caching check means get was only called ONCE total (manifest file lookup only)
+        fk.fetch_kernels(target_dir=self.test_dir, filenames=self.TEST_FILENAMES)
+
+        # Caching check means get was only called ONCE total (manifest file lookup
+        # only -- the single checksummed subdir, spk_planets, for de442.bsp).
         self.assertEqual(mock_get.call_count, 1)
 
     @patch.object(fk.requests, "get")
@@ -106,23 +110,21 @@ class TestFetchKernelsPipeline(unittest.TestCase):
         """Verify that a corrupted local file (MD5 mismatch) triggers a dynamic repair download."""
         mock_manifest_resp = MagicMock()
         mock_manifest_resp.text = self.mock_checksums_txt
-        
+
         mock_file_resp = MagicMock()
         mock_file_resp.iter_content = lambda chunk_size: [self.dummy_content]
-        
+
         mock_get.side_effect = [mock_manifest_resp] + [mock_file_resp] * 10
 
-        # Pre-seed files with invalid text data to trigger integrity mismatches
-        queue = fk.get_dynamic_ephemeris_urls()
-        for filename in fk.STATIC_KERNELS.keys():
-            queue[filename] = fk.STATIC_KERNELS[filename]
-            
+        # Pre-seed files with invalid data to trigger an integrity mismatch
+        queue = fk.get_dynamic_ephemeris_urls(filenames=self.TEST_FILENAMES)
         for filename in queue.keys():
             self.helper_create_local_file(filename, b"Corrupted Data")
 
-        fk.fetch_kernels(target_dir=self.test_dir)
-        
-        # Verify it went past the manifest to perform restorative downloads
+        fk.fetch_kernels(target_dir=self.test_dir, filenames=self.TEST_FILENAMES)
+
+        # Verify it went past the manifest to perform at least one restorative
+        # download (de442.bsp, the only file here with real checksum coverage).
         self.assertTrue(mock_get.call_count > 1)
 
     @patch.object(fk.requests, "get")
@@ -130,15 +132,18 @@ class TestFetchKernelsPipeline(unittest.TestCase):
         """Ensure an explicit ValueError is raised if a download finishes but the hash is still wrong."""
         mock_manifest_resp = MagicMock()
         mock_manifest_resp.text = self.mock_checksums_txt
-        
+
         mock_file_resp = MagicMock()
         mock_file_resp.iter_content = lambda chunk_size: [b"Defective download stream content"]
-        
+
         mock_get.side_effect = [mock_manifest_resp, mock_file_resp]
 
-        # Force a failure because downloaded stream doesn't match the manifest expectations
+        # de442.bsp is the one file in our test set with real manifest-backed
+        # checksum verification, so it's the only one that can actually
+        # trigger the "MD5 verification failure" ValueError on a bad download.
         with self.assertRaises(ValueError):
-            fk.fetch_kernels(target_dir=self.test_dir)
+            fk.fetch_kernels(target_dir=self.test_dir, filenames=["de442.bsp"])
+
 
 if __name__ == "__main__":
     unittest.main()

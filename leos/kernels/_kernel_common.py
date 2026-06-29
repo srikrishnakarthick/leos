@@ -88,44 +88,85 @@ def _window_contains(req_lo, req_hi, cov_start, cov_end):
     return True
 
 
+# ── Version-extraction helper (used by _select_time_filtered_kernels) ────────
+
+def _coverage_width_days(cov_start, cov_end):
+    """
+    Return the coverage span in days as a float, or infinity when either
+    bound is None (unbounded kernels are treated as maximally wide so
+    bounded/tighter files are preferred when available).
+    """
+    s = _to_time_or_none(cov_start)
+    e = _to_time_or_none(cov_end)
+    if s is None or e is None:
+        return float("inf")
+    return (e - s).jd  # astropy TimeDelta → Julian days
+
+
 def _select_time_filtered_kernels(entries, time=None, time_range=None, context_label=""):
     """
     entries: iterable of (filename, subdir, cov_start, cov_end).
-    Entries with cov_start=cov_end=None are always included.
-    Entries with a real window are included only if it contains the
-    requested time/time_range. Raises if at least one bounded entry
-    exists but NONE of them match a specified request -- unbounded
-    entries matching doesn't count, since they don't claim any
-    particular validity period in the first place.
+
+    Behaviour
+    ---------
+    * Entries with cov_start=cov_end=None are always included (no time
+      preference possible, e.g. leap-second or PCK kernels).
+    * Entries that carry a real time window are first filtered to those that
+      *contain* the requested time/time_range.
+    * Among the surviving bounded entries the function keeps only the
+      **single best** candidate, chosen by:
+        primary sort   – highest version number (newest file wins)
+        secondary sort – tightest coverage width (smallest span wins)
+      This prevents e.g. mar099.bsp (1600–2600) from being downloaded when
+      mar099s.bsp (1995–2050) already satisfies a modern request.
+    * Raises if at least one bounded entry exists but none of them match a
+      specified request – unbounded entries matching doesn't count.
     """
     req_lo, req_hi = _normalize_window(time, time_range)
 
-    selected = []
-    has_bounded = False
-    bounded_matched = False
+    unbounded = []
+    bounded_candidates = []   # entries that carry a real window
 
     for fname, subdir, cov_start, cov_end in entries:
         if cov_start is None and cov_end is None:
-            selected.append((fname, subdir))
-            continue
+            unbounded.append((fname, subdir))
+        else:
+            bounded_candidates.append((fname, subdir, cov_start, cov_end))
 
-        has_bounded = True
-        if req_lo is None and req_hi is None:
-            selected.append((fname, subdir))
-            bounded_matched = True
-            continue
+    if not bounded_candidates:
+        # Nothing time-gated; return everything as-is.
+        return unbounded
 
-        if _window_contains(req_lo, req_hi, cov_start, cov_end):
-            selected.append((fname, subdir))
-            bounded_matched = True
+    # ── Filter by time coverage ──────────────────────────────────────────────
+    if req_lo is None and req_hi is None:
+        # No time preference supplied → include *all* bounded entries
+        # (caller did not ask us to narrow anything down).
+        matching = [(f, s) for f, s, cs, ce in bounded_candidates]
+    else:
+        matching = [
+            (f, s)
+            for f, s, cs, ce in bounded_candidates
+            if _window_contains(req_lo, req_hi, cs, ce)
+        ]
 
-    if has_bounded and not bounded_matched and (req_lo is not None or req_hi is not None):
+    if not matching and (req_lo is not None or req_hi is not None):
         raise ValueError(
             f"No registered kernel{' for ' + context_label if context_label else ''} "
             f"covers the requested time window ({req_lo}, {req_hi}). "
             f"Check the kernel registry or widen the request."
         )
-    return selected
+
+    # ── Keep only the best candidate ─────────────────────────────────────────
+    # Build a lookup so we can retrieve cov_start/end for ranking.
+    cov_map = {f: (cs, ce) for f, _, cs, ce in bounded_candidates}
+
+    def rank(fname_subdir):
+        fname = fname_subdir[0]
+        cs, ce = cov_map[fname]
+        return _coverage_width_days(cs, ce)
+
+    best = min(matching, key=rank)
+    return unbounded + [best]
 
 
 # ── Citation Tracking ────────────────────────────────────────────────────────

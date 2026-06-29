@@ -45,7 +45,12 @@ from .Atmosphere.atmosphere_moon import MoonSurfaceConditions, MoonAtmosphericSo
 # 5. Kernels Submodule Suite
 # FIX: Removed DATA_DIRS and KERNEL_ROOT imports
 from .kernels.fetch_kernels import (
-    fetch_remote_md5s, calculate_local_md5, get_dynamic_ephemeris_urls, fetch_kernels
+    fetch_remote_md5s, calculate_local_md5, get_dynamic_ephemeris_urls, fetch_kernels,
+    get_citations, reset_citations,
+    resolve_moon_kernel, resolve_asteroid_kernel, parse_kernel_comment,
+    get_maven_kernel_urls, resolve_maven_sclk, resolve_maven_ck,
+    BODY_KERNELS, PLANET_CANDIDATE_KERNELS, ASTEROID_KERNEL_FILE,
+    LAGRANGE_KERNELS, COMET_KERNELS, COMMON_KERNELS,
 )
 
 # 6. Spectrum Submodule Suite
@@ -115,22 +120,27 @@ from .scripts.convert_era5 import (
 
 __all__ = [
     "ANGLE_UNIT",
+    "ASTEROID_KERNEL_FILE",
     "ATMO_REGISTRY",
     "AU",
     "AtmosphericColumn",
     "AtmosphericColumnMars",
     "AtmosphericProfile",
     "AtmosphericSource",
+    "BODY_KERNELS",
     "BOLTZMANN_CONSTANT",
     "COLUMN_DENSITY_UNIT",
     "COLUMN_MASS_UNIT",
-    # FIX: Removed "DATA_DIRS" string entry
-    "DISTANCE_UNIT",             
+    "COMET_KERNELS",
+    "COMMON_KERNELS",
+    "DATA_DIRS",
+    "DISTANCE_UNIT",
     "DOBSON_UNIT",
     "ELEVATION_UNIT",
     "Geometry",
     "IRRADIANCE_UNIT",
-    # FIX: Removed "KERNEL_ROOT" string entry
+    "KERNEL_ROOT",
+    "LAGRANGE_KERNELS",
     "MARS_ATMO_REGISTRY",
     "MASS_DENSITY_UNIT",
     "MASTER_WL",
@@ -143,6 +153,7 @@ __all__ = [
     "MoonAtmosphericSource",
     "MoonSurfaceConditions",
     "NUMBER_DENSITY_UNIT",
+    "PLANET_CANDIDATE_KERNELS",
     "PRESSURE_UNIT",
     "REGISTRY",
     "SOLAR_LUMINOSITY",
@@ -193,9 +204,11 @@ __all__ = [
     "fetch_kernels",
     "fetch_remote_md5s",
     "generate_mcd_bundled_profiles",
+    "get_citations",
     "get_dynamic_ephemeris_urls",
     "get_fov_intercept",
     "get_info",
+    "get_maven_kernel_urls",
     "get_solar_spectrum",
     "get_spacecraft_attitude",
     "get_state_vector",
@@ -205,11 +218,17 @@ __all__ = [
     "illumination_fraction",
     "kernel_sandbox",
     "load_kernels",
+    "parse_kernel_comment",
     "parse_pmip4",
     "parse_satire_m",
     "parse_satire_s",
     "parse_satire_t",
-    "propagate",             # Added from Section 1 mapping requirements
+    "propagate",
+    "reset_citations",
+    "resolve_asteroid_kernel",
+    "resolve_maven_ck",
+    "resolve_maven_sclk",
+    "resolve_moon_kernel",
     "solar_zenith_angle",
     "sources_valid_at",
     "spice",
@@ -225,5 +244,5 @@ __all__ = [
     "write_lola_npz",
     "write_mcd_npz",
     "write_merra2_npz",
-    "write_satire_npz"
+    "write_satire_npz",
 ]

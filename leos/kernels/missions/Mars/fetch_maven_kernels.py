@@ -101,14 +101,25 @@ def resolve_maven_ck(time=None, time_range=None, structure="sc"):
         return []
 
     candidates = []
+    seen_files = set()
+
     for m in _MAVEN_CK_DATE_RE.finditer(listing):
         str_type, start_str, end_str = m.group(1), m.group(2), m.group(3)
         if str_type != structure:
             continue
         fname = m.group(0)
-        # skip archived files (old versions superseded by later ones)
-        if "archived" in fname:
+        
+        # Guard 1: Drop duplicate regex evaluations from the HTML line string
+        if fname in seen_files:
             continue
+        seen_files.add(fname)
+
+        # Guard 2: Exclude archived files by checking the local HTML line prefix context
+        match_start = m.start()
+        context = listing[max(0, match_start-50):match_start]
+        if "archived/" in context:
+            continue
+
         cov_start = _parse_maven_ck_date(start_str)
         cov_end = _parse_maven_ck_date(end_str)
         if cov_start is None or cov_end is None:
@@ -126,14 +137,6 @@ def get_kernel_urls(time=None, time_range=None, include_ck=True):
     Resolve all MAVEN kernel URLs for a given time or time_range.
 
     Returns dict[filename -> URL].
-
-    Includes:
-      - Common kernels (naif0012.tls, pck00011.tpc, de442.bsp)
-      - MAVEN static kernels (FK, structure SPK)
-      - MAVEN ancillary SPK (de421, mar097s)
-      - Latest SCLK
-      - Reconstructed orbit SPK (maven_orb_rec.bsp)
-      - Weekly CK files covering the requested window (if include_ck=True)
     """
     urls = {}
 

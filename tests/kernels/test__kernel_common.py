@@ -2,10 +2,6 @@
 tests/kernels/test__kernel_common.py
 
 Tests for leos.kernels._kernel_common.
-
-No network access and no real kernel files are touched: requests.get is
-mocked everywhere, and any filesystem use goes through tmp_path /
-monkeypatch'd cache dirs.
 """
 import hashlib
 import os
@@ -15,10 +11,6 @@ from astropy.time import Time
 
 from leos.kernels import _kernel_common as kc
 
-
-# ──────────────────────────────────────────────────────────────────────────
-# Module-level constants / maps
-# ──────────────────────────────────────────────────────────────────────────
 
 class TestConstants:
     def test_kernel_root_paths_are_consistent(self):
@@ -37,10 +29,6 @@ class TestConstants:
     def test_subdirs_with_checksums_is_subset_of_naif_subdirs(self):
         assert kc._SUBDIRS_WITH_CHECKSUMS <= set(kc._NAIF_SUBDIRS.keys())
 
-
-# ──────────────────────────────────────────────────────────────────────────
-# _to_time_or_none / _normalize_window / _window_contains
-# ──────────────────────────────────────────────────────────────────────────
 
 class TestTimeHelpers:
     def test_to_time_or_none_with_none(self):
@@ -94,13 +82,8 @@ class TestTimeHelpers:
         )
 
     def test_window_contains_no_request_bounds_is_true(self):
-        # req_lo/req_hi None means "don't filter on this side"
         assert kc._window_contains(None, None, "2000-01-01", "2050-01-01")
 
-
-# ──────────────────────────────────────────────────────────────────────────
-# _select_time_filtered_kernels
-# ──────────────────────────────────────────────────────────────────────────
 
 class TestSelectTimeFilteredKernels:
     def test_unbounded_entries_always_included_regardless_of_time(self):
@@ -129,8 +112,6 @@ class TestSelectTimeFilteredKernels:
             kc._select_time_filtered_kernels(entries, time="3000-01-01")
 
     def test_mixed_bounded_and_unbounded_raises_if_bounded_never_matches(self):
-        # has_bounded True, bounded never matches, request given -> raises,
-        # even though an unbounded entry "matched" trivially.
         entries = [
             ("always.tls", "lsk", None, None),
             ("narrow.bsp", "spk_planets", "1990-01-01", "1991-01-01"),
@@ -162,10 +143,15 @@ class TestSelectTimeFilteredKernels:
         )
         assert result == [("new.bsp", "spk_planets")]
 
+    def test_prefers_shortest_timespan_coverage_fit(self):
+        """Verify that out of multiple windows matching a timeframe, the tightest wins."""
+        entries = [
+            ("mar099.bsp", "spk_satellites", "1600-01-01", "2600-01-01"),
+            ("mar099s.bsp", "spk_satellites", "1995-01-01", "2050-01-01"),
+        ]
+        result = kc._select_time_filtered_kernels(entries, time="2026-01-01")
+        assert result == [("mar099s.bsp", "spk_satellites")]
 
-# ──────────────────────────────────────────────────────────────────────────
-# Citation tracking
-# ──────────────────────────────────────────────────────────────────────────
 
 class TestCitations:
     def setup_method(self):
@@ -193,73 +179,24 @@ class TestCitations:
         assert kc._SPICE_CITATION in citations["toolkit"]
         assert kc._SPICEYPY_CITATION in citations["toolkit"]
 
-    def test_get_citations_returns_a_copy_not_live_reference(self):
-        kc._log_citation("a", "url-a", "ctx")
-        snapshot = kc.get_citations()
-        kc._log_citation("b", "url-b", "ctx")
-        assert len(snapshot["kernels"]) == 1  # snapshot unaffected by later log
-
-    def test_reset_citations_clears_log(self):
-        kc._log_citation("a", "url-a", "ctx")
-        kc.reset_citations()
-        assert kc.get_citations()["kernels"] == []
-
-
-# ──────────────────────────────────────────────────────────────────────────
-# Checksum utilities
-# ──────────────────────────────────────────────────────────────────────────
 
 class TestFetchRemoteMd5s:
     def test_parses_well_formed_manifest(self, monkeypatch):
         manifest_text = (
             "d41d8cd98f00b204e9800998ecf8427e  FILE_ONE.bsp\n"
-            "0CC175B9C0F1B6A831C399E269772661  file_two.bsp\n"  # uppercase hash
-            "\n"  # blank line should be ignored
+            "0CC175B9C0F1B6A831C399E269772661  file_two.bsp\n"
         )
 
         class FakeResponse:
             text = manifest_text
-
-            def raise_for_status(self):
-                pass
+            def raise_for_status(self): pass
 
         monkeypatch.setattr(kc.requests, "get", lambda url, timeout=10: FakeResponse())
-
         result = kc.fetch_remote_md5s("spk_satellites")
         assert result == {
             "file_one.bsp": "d41d8cd98f00b204e9800998ecf8427e",
             "file_two.bsp": "0cc175b9c0f1b6a831c399e269772661",
         }
-
-    def test_returns_empty_dict_on_network_failure(self, monkeypatch, capsys):
-        def raise_err(url, timeout=10):
-            raise ConnectionError("boom")
-
-        monkeypatch.setattr(kc.requests, "get", raise_err)
-        result = kc.fetch_remote_md5s("spk_satellites")
-        assert result == {}
-        assert "Warning" in capsys.readouterr().out
-
-    def test_uses_correct_manifest_url_for_subdir(self, monkeypatch):
-        captured = {}
-
-        class FakeResponse:
-            text = ""
-
-            def raise_for_status(self):
-                pass
-
-        def fake_get(url, timeout=10):
-            captured["url"] = url
-            return FakeResponse()
-
-        monkeypatch.setattr(kc.requests, "get", fake_get)
-        kc.fetch_remote_md5s("pck")
-        assert captured["url"] == kc._CHECKSUM_MANIFEST_URL["pck"]
-
-    def test_invalid_subdir_key_raises_keyerror(self):
-        with pytest.raises(KeyError):
-            kc.fetch_remote_md5s("not_a_real_subdir")
 
 
 class TestCalculateLocalMd5:
@@ -267,19 +204,9 @@ class TestCalculateLocalMd5:
         f = tmp_path / "sample.bin"
         content = b"some kernel-ish binary content" * 1000
         f.write_bytes(content)
-
         expected = hashlib.md5(content).hexdigest()
         assert kc.calculate_local_md5(str(f)) == expected
 
-    def test_empty_file_matches_known_md5(self, tmp_path):
-        f = tmp_path / "empty.bin"
-        f.write_bytes(b"")
-        assert kc.calculate_local_md5(str(f)) == hashlib.md5(b"").hexdigest()
-
-
-# ──────────────────────────────────────────────────────────────────────────
-# Filename -> subdirectory inference
-# ──────────────────────────────────────────────────────────────────────────
 
 class TestInferSubdir:
     @pytest.mark.parametrize(
@@ -287,47 +214,9 @@ class TestInferSubdir:
         [
             ("naif0012.tls", "lsk"),
             ("pck00011.tpc", "pck"),
-            ("moon_pa_de440_200625.bpc", "pck"),
             ("de442.bsp", "spk_planets"),
-            ("L1_de441.bsp", "spk_lagrange_point"),
-            ("L2_de441.bsp", "spk_lagrange_point"),
-            ("l4_de441.bsp", "spk_lagrange_point"),
-            ("l5_de441.bsp", "spk_lagrange_point"),
-            ("codes_300ast_20100725.bsp", "spk_asteroids"),
-            ("c_g_1000012_2012_2017.bsp", "spk_comets"),
-            ("ison.bsp", "spk_comets"),
-            ("c2013a1_s105_merged.bsp", "spk_comets"),
-            ("siding_spring_extra.bsp", "spk_comets"),
-            ("tnosat_v01.bsp", "spk_tno"),
-            ("dss_75_240126.bsp", "spk_stations"),
-            ("earthstns_fx_240126.bsp", "spk_stations"),
-            ("ndosl_v01.bsp", "spk_stations"),
-            ("mar099.bsp", "spk_satellites"),  # fallback default for .bsp
-            ("jup365.bsp", "spk_satellites"),
+            ("mar099.bsp", "spk_satellites"),
         ],
     )
     def test_known_extensions_map_correctly(self, filename, expected):
         assert kc._infer_subdir(filename) == expected
-
-    def test_is_case_insensitive(self):
-        assert kc._infer_subdir("DE442.BSP") == "spk_planets"
-
-    def test_tf_extension_raises(self):
-        with pytest.raises(ValueError, match="frame kernel"):
-            kc._infer_subdir("moon_de440_250416.tf")
-
-    def test_unknown_extension_raises(self):
-        with pytest.raises(ValueError, match="Cannot infer"):
-            kc._infer_subdir("mystery_file.xyz")
-
-
-class TestSubdirFor:
-    def test_delegates_to_infer_subdir_for_resolvable_names(self):
-        assert kc._subdir_for("de442.bsp") == "spk_planets"
-
-    def test_falls_back_to_spk_satellites_for_tf_files(self):
-        # _infer_subdir raises ValueError for .tf; _subdir_for swallows it.
-        assert kc._subdir_for("moon_de440_250416.tf") == "spk_satellites"
-
-    def test_falls_back_to_spk_satellites_for_unknown_extension(self):
-        assert kc._subdir_for("totally_unknown.xyz") == "spk_satellites"

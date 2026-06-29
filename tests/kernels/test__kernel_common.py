@@ -1,14 +1,11 @@
-"""
-tests/kernels/test__kernel_common.py
-
-Tests for leos.kernels._kernel_common.
-"""
 import hashlib
 import os
-
 import pytest
+import requests
 from astropy.time import Time
+from unittest.mock import patch, MagicMock
 
+# Import the module under test
 from leos.kernels import _kernel_common as kc
 
 
@@ -35,60 +32,65 @@ class TestTimeHelpers:
         assert kc._to_time_or_none(None) is None
 
     def test_to_time_or_none_with_time_instance_returns_same_object(self):
-        t = Time("2020-01-01")
+        t = Time("2026-01-01")
         assert kc._to_time_or_none(t) is t
 
     def test_to_time_or_none_with_string(self):
-        result = kc._to_time_or_none("2020-01-01")
+        result = kc._to_time_or_none("2026-06-29T12:00:00")
         assert isinstance(result, Time)
-        assert result.isot.startswith("2020-01-01")
+        assert result.isot.startswith("2026-06-29T12:00:00")
 
     def test_normalize_window_no_args_returns_none_none(self):
         assert kc._normalize_window() == (None, None)
 
     def test_normalize_window_with_time_range(self):
-        lo, hi = kc._normalize_window(time_range=("2020-01-01", "2021-01-01"))
+        lo, hi = kc._normalize_window(time_range=("2026-01-01", "2026-01-02"))
         assert isinstance(lo, Time) and isinstance(hi, Time)
         assert lo < hi
 
     def test_normalize_window_with_single_time_sets_lo_eq_hi(self):
-        lo, hi = kc._normalize_window(time="2020-06-01")
+        lo, hi = kc._normalize_window(time="2026-06-01")
         assert lo == hi
         assert isinstance(lo, Time)
 
     def test_normalize_window_time_range_takes_priority_over_time(self):
         lo, hi = kc._normalize_window(
-            time="2020-06-01", time_range=("2020-01-01", "2021-01-01")
+            time="2026-06-01", time_range=("2026-01-01", "2026-01-02")
         )
-        assert lo == Time("2020-01-01")
-        assert hi == Time("2021-01-01")
+        assert lo == Time("2026-01-01")
+        assert hi == Time("2026-01-02")
 
     def test_window_contains_both_bounds_none_always_true(self):
-        assert kc._window_contains(Time("2020-01-01"), Time("2020-01-01"), None, None)
+        assert kc._window_contains(Time("2026-01-01"), Time("2026-01-01"), None, None)
 
     def test_window_contains_request_within_coverage(self):
         assert kc._window_contains(
-            Time("2020-06-01"), Time("2020-06-01"), "2000-01-01", "2050-01-01"
+            Time("2026-06-01"), Time("2026-06-01"), "2026-01-01", "2026-12-31"
         )
 
     def test_window_contains_request_starts_before_coverage(self):
         assert not kc._window_contains(
-            Time("1999-01-01"), Time("2020-01-01"), "2000-01-01", "2050-01-01"
+            Time("2025-12-31"), Time("2026-01-01"), "2026-01-01", "2026-12-31"
         )
 
     def test_window_contains_request_ends_after_coverage(self):
         assert not kc._window_contains(
-            Time("2020-01-01"), Time("2060-01-01"), "2000-01-01", "2050-01-01"
+            Time("2026-01-01"), Time("2027-01-01"), "2026-01-01", "2026-12-31"
         )
 
     def test_window_contains_no_request_bounds_is_true(self):
-        assert kc._window_contains(None, None, "2000-01-01", "2050-01-01")
+        assert kc._window_contains(None, None, "2026-01-01", "2026-12-31")
+
+    def test_coverage_width_days(self):
+        assert kc._coverage_width_days("2026-01-01", "2026-01-11") == 10.0
+        assert kc._coverage_width_days(None, "2026-01-11") == float("inf")
+        assert kc._coverage_width_days("2026-01-01", None) == float("inf")
 
 
 class TestSelectTimeFilteredKernels:
     def test_unbounded_entries_always_included_regardless_of_time(self):
         entries = [("a.tls", "lsk", None, None), ("b.tpc", "pck", None, None)]
-        result = kc._select_time_filtered_kernels(entries, time="2020-01-01")
+        result = kc._select_time_filtered_kernels(entries, time="2026-01-01")
         assert result == [("a.tls", "lsk"), ("b.tpc", "pck")]
 
     def test_unbounded_entries_included_with_no_time_request(self):
@@ -103,7 +105,7 @@ class TestSelectTimeFilteredKernels:
 
     def test_bounded_entry_included_when_request_matches(self):
         entries = [("de442.bsp", "spk_planets", "1549-12-31", "2650-01-25")]
-        result = kc._select_time_filtered_kernels(entries, time="2020-01-01")
+        result = kc._select_time_filtered_kernels(entries, time="2026-01-01")
         assert result == [("de442.bsp", "spk_planets")]
 
     def test_bounded_entry_excluded_and_raises_when_request_outside_window(self):
@@ -117,21 +119,21 @@ class TestSelectTimeFilteredKernels:
             ("narrow.bsp", "spk_planets", "1990-01-01", "1991-01-01"),
         ]
         with pytest.raises(ValueError):
-            kc._select_time_filtered_kernels(entries, time="2050-01-01")
+            kc._select_time_filtered_kernels(entries, time="2026-01-01")
 
     def test_mixed_bounded_and_unbounded_succeeds_when_bounded_matches(self):
         entries = [
             ("always.tls", "lsk", None, None),
             ("wide.bsp", "spk_planets", "1900-01-01", "2100-01-01"),
         ]
-        result = kc._select_time_filtered_kernels(entries, time="2050-01-01")
+        result = kc._select_time_filtered_kernels(entries, time="2026-01-01")
         assert ("always.tls", "lsk") in result
         assert ("wide.bsp", "spk_planets") in result
 
     def test_context_label_appears_in_error_message(self):
         entries = [("x.bsp", "spk_planets", "1990-01-01", "1991-01-01")]
         with pytest.raises(ValueError, match="for 'MARS'"):
-            kc._select_time_filtered_kernels(entries, time="2050-01-01", context_label="for 'MARS'")
+            kc._select_time_filtered_kernels(entries, time="2026-01-01", context_label="for 'MARS'")
 
     def test_time_range_filters_entries(self):
         entries = [
@@ -144,7 +146,6 @@ class TestSelectTimeFilteredKernels:
         assert result == [("new.bsp", "spk_planets")]
 
     def test_prefers_shortest_timespan_coverage_fit(self):
-        """Verify that out of multiple windows matching a timeframe, the tightest wins."""
         entries = [
             ("mar099.bsp", "spk_satellites", "1600-01-01", "2600-01-01"),
             ("mar099s.bsp", "spk_satellites", "1995-01-01", "2050-01-01"),
@@ -198,6 +199,11 @@ class TestFetchRemoteMd5s:
             "file_two.bsp": "0cc175b9c0f1b6a831c399e269772661",
         }
 
+    @patch("leos.kernels._kernel_common.requests.get")
+    def test_fetch_remote_md5s_exception(self, mock_get):
+        mock_get.side_effect = requests.exceptions.RequestException("Timeout")
+        assert kc.fetch_remote_md5s("spk_satellites") == {}
+
 
 class TestCalculateLocalMd5:
     def test_matches_hashlib_reference(self, tmp_path):
@@ -214,10 +220,28 @@ class TestInferSubdir:
         [
             ("naif0012.tls", "lsk"),
             ("pck00011.tpc", "pck"),
+            ("earth_200101_260101.tpc", "pck"),
+            ("pck00011.bpc", "pck"),
             ("de442.bsp", "spk_planets"),
+            ("l1_mission.bsp", "spk_lagrange_point"),
+            ("codes_asteroids.bsp", "spk_asteroids"),
+            ("c_g_comet.bsp", "spk_comets"),
+            ("tnosat_object.bsp", "spk_tno"),
+            ("dss_station.bsp", "spk_stations"),
             ("mar099.bsp", "spk_satellites"),
         ],
     )
     def test_known_extensions_map_correctly(self, filename, expected):
         assert kc._infer_subdir(filename) == expected
-# Force-sync timestamp update
+
+    def test_infer_subdir_invalid_or_ambiguous(self):
+        with pytest.raises(ValueError, match="Cannot infer NAIF subdirectory for frame kernel"):
+            kc._infer_subdir("planets.tf")
+
+        with pytest.raises(ValueError, match="Cannot infer NAIF subdirectory for"):
+            kc._infer_subdir("invalid_kernel.txt")
+
+    def test_subdir_for_fallback(self):
+        assert kc._subdir_for("planets.tf") == "spk_satellites"
+        assert kc._subdir_for("unknown.extension") == "spk_satellites"
+        assert kc._subdir_for("de442.bsp") == "spk_planets"

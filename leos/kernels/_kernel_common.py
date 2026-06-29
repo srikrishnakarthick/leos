@@ -115,8 +115,7 @@ def _select_time_filtered_kernels(entries, time=None, time_range=None, context_l
       *contain* the requested time/time_range.
     * Among the surviving bounded entries the function keeps only the
       **single best** candidate, chosen by:
-        primary sort   – highest version number (newest file wins)
-        secondary sort – tightest coverage width (smallest span wins)
+        - Tightest coverage width (the file with the smallest date span wins).
       This prevents e.g. mar099.bsp (1600–2600) from being downloaded when
       mar099s.bsp (1995–2050) already satisfies a modern request.
     * Raises if at least one bounded entry exists but none of them match a

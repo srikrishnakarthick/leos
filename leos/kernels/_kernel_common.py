@@ -22,6 +22,25 @@ import requests
 import re
 from astropy.time import Time
 
+# ── Session-Scoped Cache (in-memory only; never touches disk, never
+#    persists past process exit) ──────────────────────────────────────────
+# Directory listings and coverage summaries change rarely enough that
+# hitting NAIF once per URL per run is plenty fresh, while still avoiding
+# a dozen+ redundant round-trips within a single script (e.g. resolving
+# LSK/PCK/DE on every fetch_kernels() call, or scanning giant-planet moon
+# candidates repeatedly for the same body lookup).
+_SESSION_CACHE = {}
+
+
+def reset_session_cache():
+    """
+    Clears the in-memory listing/comment cache. Call this if you want a
+    long-running process (a notebook, a service) to re-check NAIF for
+    updates without restarting -- normal short-lived scripts don't need
+    to call this at all, since the cache dies with the process anyway.
+    """
+    _SESSION_CACHE.clear()
+
 # ── Directory Architecture ───────────────────────────────────────────────────
 KERNEL_ROOT = os.path.join(os.path.dirname(__file__), "data")
 _DEFAULT_KERNEL_ROOT = KERNEL_ROOT
@@ -444,31 +463,6 @@ def _best_effort_parse_date(token):
         return None
 
 
-def _fetch_spk_coverage_summary(subdir_url, filename="aa_summaries.txt"):
-    """
-    Tolerantly parse NAIF's aa_summaries.txt (published alongside the
-    kernels for exactly this purpose) into
-    {filename: (Time_or_None, Time_or_None)}. Best-effort: any block this
-    can't confidently parse is simply left out, and callers already treat
-    a missing entry as 'coverage unknown, don't prefer this candidate.'
-    """
-    try:
-        resp = requests.get(subdir_url + filename, timeout=15)
-        resp.raise_for_status()
-        text = resp.text
-    except Exception as e:
-        print(f"Warning: could not fetch {filename} from {subdir_url} ({e}).")
-        return {}
-
-    coverage = {}
-    for fname, start_tok, end_tok in _SUMMARY_BLOCK_RE.findall(text):
-        start = _best_effort_parse_date(start_tok)
-        end = _best_effort_parse_date(end_tok)
-        if start or end:
-            coverage[fname] = (start, end)
-    return coverage
-
-
 def resolve_best_planetary_spk(time=None, time_range=None):
     listing = _fetch_directory_listing(_SPK_PLANETS_URL)
     versions = {}
@@ -533,22 +527,3 @@ def _warn_if_uncovered(fname, time, time_range, coverage=None):
               f"fully contain the requested window ({req_lo}, {req_hi}). "
               f"This is NAIF's highest-version planetary SPK available, "
               f"but your request may fall outside its validated range.")
-
-# ── Session-Scoped Cache (in-memory only; never touches disk, never
-#    persists past process exit) ──────────────────────────────────────────
-# Directory listings and coverage summaries change rarely enough that
-# hitting NAIF once per URL per run is plenty fresh, while still avoiding
-# a dozen+ redundant round-trips within a single script (e.g. resolving
-# LSK/PCK/DE on every fetch_kernels() call, or scanning giant-planet moon
-# candidates repeatedly for the same body lookup).
-_SESSION_CACHE = {}
-
-
-def reset_session_cache():
-    """
-    Clears the in-memory listing/comment cache. Call this if you want a
-    long-running process (a notebook, a service) to re-check NAIF for
-    updates without restarting -- normal short-lived scripts don't need
-    to call this at all, since the cache dies with the process anyway.
-    """
-    _SESSION_CACHE.clear()

@@ -14,6 +14,7 @@ import os
 import re
 import requests
 from astropy.time import Time
+from . import _kernel_common as _kc
 
 from ._kernel_common import (
     _NAIF_BASE,
@@ -332,32 +333,6 @@ def _fetch_asteroid_tf_text(force=False):
 
     _kc._SESSION_CACHE[cache_key] = text
     return text
-
-def _fetch_asteroid_tf_text(force=False):
-    """
-    Fetch (and disk-cache) codes_300ast_20100725.tf, which contains
-    NAIF_BODY_NAME/CODE blocks for all 300 asteroids.  The .cmt for this
-    file has no body listing ('use BRIEF') -- the .tf does.
-    """
-    tf_name = "codes_300ast_20100725.tf"
-    cache_path = _comment_cache_path(tf_name)
-    if not force and os.path.exists(cache_path):
-        with open(cache_path, "r", encoding="utf-8", errors="replace") as f:
-            return f.read()
-
-    url = _NAIF_BASE + _NAIF_SUBDIRS["spk_asteroids"] + tf_name
-    try:
-        resp = requests.get(url, timeout=15)
-        resp.raise_for_status()
-        text = resp.text
-    except Exception as e:
-        print(f"Could not fetch asteroid TF ({e}); asteroid name lookup unavailable.")
-        text = ""
-
-    with open(cache_path, "w", encoding="utf-8") as f:
-        f.write(text)
-    return text
-
 
 _AST_TF_RE = re.compile(
     r"NAIF_BODY_NAME\s*\+=\s*\(\s*'(?:\d+\s+)?([^']+)'\s*\)\s*"

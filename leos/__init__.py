@@ -43,14 +43,13 @@ from .Atmosphere.atmosphere_mars import AtmosphericColumnMars, MarsAtmosphericSo
 from .Atmosphere.atmosphere_moon import MoonSurfaceConditions, MoonAtmosphericSource, MOON_ATMO_REGISTRY
 
 # 5. Kernels Submodule Suite
-# FIX: Removed DATA_DIRS and KERNEL_ROOT imports
 from .kernels.fetch_kernels import (
     fetch_remote_md5s, calculate_local_md5, get_dynamic_ephemeris_urls, fetch_kernels,
     get_citations, reset_citations,
     resolve_moon_kernel, resolve_asteroid_kernel, parse_kernel_comment,
     get_maven_kernel_urls, resolve_maven_sclk, resolve_maven_ck,
     BODY_KERNELS, PLANET_CANDIDATE_KERNELS, ASTEROID_KERNEL_FILE,
-    LAGRANGE_KERNELS, COMET_KERNELS, COMMON_KERNELS,
+    LAGRANGE_KERNELS, COMET_KERNELS, get_common_kernels,
 )
 
 # 6. Spectrum Submodule Suite
@@ -132,7 +131,7 @@ __all__ = [
     "COLUMN_DENSITY_UNIT",
     "COLUMN_MASS_UNIT",
     "COMET_KERNELS",
-    "COMMON_KERNELS",
+    "get_common_kernels",
     "DATA_DIRS",
     "DISTANCE_UNIT",
     "DOBSON_UNIT",

@@ -23,18 +23,14 @@ from ._kernel_common import (
     _window_contains,
     _select_time_filtered_kernels,
     _infer_subdir,
+    resolve_latest_lsk,
+    resolve_latest_pck,
+    resolve_best_planetary_spk,
 )
 
 import calendar
 
 _MONTH_NUM = {abbr.upper(): i for i, abbr in enumerate(calendar.month_abbr) if abbr}
-
-# ── Common Kernels (always fetched, body-independent) ───────────────────────
-COMMON_KERNELS = [
-    ("naif0012.tls", "lsk", None, None),
-    ("pck00011.tpc", "pck", None, None),
-    ("de442.bsp", "spk_planets", "1549-12-31", "2650-01-25"),
-]
 
 # ── Body Kernel Registry ────────
 BODY_KERNELS = {
@@ -154,15 +150,17 @@ def _select_body_kernels(body, time=None, time_range=None):
 def select_common_kernels(time=None, time_range=None):
     """
     Public (no leading underscore, unlike the rest of this module's helpers)
-    because kernels/missions/* needs it too -- e.g. MAVEN's kernel set
-    bundles in the same naif0012.tls/pck00011.tpc/de442.bsp set as any
-    plain body request.
-    """
-    return _select_time_filtered_kernels(
-        COMMON_KERNELS, time=time, time_range=time_range,
-        context_label="the common kernel set",
-    )
+    because kernels/missions/* needs it too.
 
+    Dynamically resolves NAIF's current-best LSK, generic PCK, and
+    planetary SPK from live directory listings instead of a hardcoded
+    filename list.
+    """
+    return [
+        (resolve_latest_lsk(), "lsk"),
+        (resolve_latest_pck(), "pck"),
+        (resolve_best_planetary_spk(time=time, time_range=time_range), "spk_planets"),
+    ]
 
 def _select_named_static_kernel(entry, time=None, time_range=None, label=""):
     """
@@ -287,15 +285,16 @@ def _comment_cache_path(filename):
 
 def _fetch_comment_text(filename, subdir="spk_satellites", force=False):
     """
-    Fetch (and disk-cache) the small text comment for `filename` WITHOUT
-    downloading the multi-gigabyte binary kernel. Returns "" on any failure
-    (404, network error, etc.) so callers treat that candidate as simply
-    not matching, rather than crashing the whole resolution pass.
+    Fetch the small text comment for `filename` WITHOUT downloading the
+    multi-gigabyte binary kernel. Cached in-memory for the life of the
+    process; pass force=True to bypass the cache for this call (e.g. a
+    long-running process that wants to double-check NAIF hasn't revised
+    a .cmt without restarting). Returns "" on any failure so callers
+    treat that candidate as simply not matching.
     """
-    cache_path = _comment_cache_path(filename)
-    if not force and os.path.exists(cache_path):
-        with open(cache_path, "r", encoding="utf-8", errors="replace") as f:
-            return f.read()
+    cache_key = ("cmt", filename, subdir)
+    if not force and cache_key in _kc._SESSION_CACHE:
+        return _kc._SESSION_CACHE[cache_key]
 
     cmt_name = re.sub(r"\.bsp$", ".cmt", filename)
     url = _NAIF_BASE + _NAIF_SUBDIRS[subdir] + cmt_name
@@ -306,12 +305,33 @@ def _fetch_comment_text(filename, subdir="spk_satellites", force=False):
     except Exception as e:
         print(f"Could not fetch comment for {filename} ({e}); "
               f"skipping it as a candidate for this lookup.")
-        text = ""
+        return ""  # failures are NOT cached
 
-    with open(cache_path, "w", encoding="utf-8") as f:
-        f.write(text)
+    _kc._SESSION_CACHE[cache_key] = text
     return text
 
+
+def _fetch_asteroid_tf_text(force=False):
+    """
+    Fetch codes_300ast_20100725.tf. Cached in-memory for the life of the
+    process; pass force=True to bypass.
+    """
+    cache_key = ("asteroid_tf",)
+    if not force and cache_key in _kc._SESSION_CACHE:
+        return _kc._SESSION_CACHE[cache_key]
+
+    tf_name = "codes_300ast_20100725.tf"
+    url = _NAIF_BASE + _NAIF_SUBDIRS["spk_asteroids"] + tf_name
+    try:
+        resp = requests.get(url, timeout=15)
+        resp.raise_for_status()
+        text = resp.text
+    except Exception as e:
+        print(f"Could not fetch asteroid TF ({e}); asteroid name lookup unavailable.")
+        return ""  # failures are NOT cached
+
+    _kc._SESSION_CACHE[cache_key] = text
+    return text
 
 def _fetch_asteroid_tf_text(force=False):
     """

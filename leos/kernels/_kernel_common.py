@@ -107,6 +107,21 @@ def _window_contains(req_lo, req_hi, cov_start, cov_end):
         return False
     return True
 
+def _window_overlaps(req_lo, req_hi, cov_start, cov_end):
+    """
+    Unlike _window_contains (does coverage fully contain the request?),
+    this answers "does coverage overlap the request at all?" -- the
+    correct test for multi-file sets like weekly CKs, where a multi-week
+    request should return every CK that overlaps any part of it rather
+    than requiring a single file to span the whole thing.
+    """
+    cov_start_t = _to_time_or_none(cov_start)
+    cov_end_t = _to_time_or_none(cov_end)
+    if cov_end_t is not None and req_lo is not None and cov_end_t < req_lo:
+        return False
+    if cov_start_t is not None and req_hi is not None and cov_start_t > req_hi:
+        return False
+    return True
 
 # ── Version-extraction helper (used by _select_time_filtered_kernels) ────────
 

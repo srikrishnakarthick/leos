@@ -16,31 +16,51 @@ import requests
 from ... import _kernel_common as _kc
 from ...fetch_generic_kernels import select_common_kernels
 
-# ── MAVEN kernel base URL ─────────────────────────────────────────────────────
 _MAVEN_BASE = "https://naif.jpl.nasa.gov/pub/naif/MAVEN/kernels/"
 
-# Static kernels: always load these (latest version of each) ──────────────────
-MAVEN_STATIC_KERNELS = [
-    # FK: latest frames kernel
-    ("maven_v12.tf",              _MAVEN_BASE + "fk/"),
-    # LSK: handled by select_common_kernels (naif0012.tls) -- skip
-    # PCK: handled by select_common_kernels (pck00011.tpc) -- skip
-    # Structure SPK
-    ("maven_struct_v12.bsp",      _MAVEN_BASE + "spk/"),
-]
+# ── Dynamic resolvers replacing hardcoded MAVEN_STATIC_KERNELS ─────────────
+_MAVEN_FK_RE = re.compile(r"^maven_v(\d+)\.tf$", re.IGNORECASE)
+_MAVEN_STRUCT_SPK_RE = re.compile(r"^maven_struct_v(\d+)\.bsp$", re.IGNORECASE)
 
-# Rolling reconstructed SPK (always up to date, covers full mission) ──────────
+
+def resolve_latest_maven_fk():
+    """Highest-numbered maven_vNN.tf in MAVEN's fk/ directory."""
+    listing = _kc._fetch_directory_listing(_MAVEN_BASE + "fk/")
+    versions = [
+        (int(m.group(1)), fname)
+        for fname in listing
+        if (m := _MAVEN_FK_RE.match(fname))
+    ]
+    if not versions:
+        print("Warning: could not determine latest MAVEN FK from listing; "
+              "falling back to maven_v12.tf.")
+        return "maven_v12.tf"
+    return max(versions)[1]
+
+
+def resolve_latest_maven_struct_spk():
+    """Highest-numbered maven_struct_vNN.bsp in MAVEN's spk/ directory."""
+    listing = _kc._fetch_directory_listing(_MAVEN_BASE + "spk/")
+    versions = [
+        (int(m.group(1)), fname)
+        for fname in listing
+        if (m := _MAVEN_STRUCT_SPK_RE.match(fname))
+    ]
+    if not versions:
+        print("Warning: could not determine latest MAVEN structure SPK from "
+              "listing; falling back to maven_struct_v12.bsp.")
+        return "maven_struct_v12.bsp"
+    return max(versions)[1]
+
+
+# MAVEN_STATIC_KERNELS list is now DELETED -- replaced by the two resolvers above.
+
 MAVEN_RECONSTRUCTED_SPK = ("maven_orb_rec.bsp", _MAVEN_BASE + "spk/")
-
-# Predicted SPK (future coverage) ─────────────────────────────────────────────
 MAVEN_PREDICTED_SPK = ("maven_orb.bsp", _MAVEN_BASE + "spk/")
-
-# Background Mars + de421 needed by mission kernels (NAIF recommendation) ─────
 MAVEN_ANCILLARY_SPK = [
     ("de421.bsp",    _MAVEN_BASE + "spk/"),
     ("mar097s.bsp",  _MAVEN_BASE + "spk/"),
 ]
-
 
 def resolve_maven_sclk():
     """
@@ -75,19 +95,10 @@ def _parse_maven_ck_date(token):
     except Exception:
         return None
 
-
 def resolve_maven_ck(time=None, time_range=None, structure="sc"):
     """
     Return the list of MAVEN attitude CK filenames (mvn_sc_rel_* or
     mvn_app_rel_*) whose coverage overlaps the requested time/time_range.
-
-    structure: 'sc' for spacecraft, 'app' for articulated payload platform.
-
-    Fetches the ck/ directory listing, filters by structure and coverage,
-    and returns filenames sorted oldest-first (so SPICE loads them in the
-    right priority order).
-
-    Falls back to an empty list (attitude-free) if the listing fetch fails.
     """
     req_lo, req_hi = _kc._normalize_window(time, time_range)
 
@@ -103,21 +114,24 @@ def resolve_maven_ck(time=None, time_range=None, structure="sc"):
     candidates = []
     seen_files = set()
 
-    for m in _MAVEN_CK_DATE_RE.finditer(listing):
+    # Line-based scan instead of a fixed character lookbehind: robust to
+    # NAIF changing row spacing/format, since "archived/" only ever
+    # appears as part of the href path on the SAME listing line as the
+    # filename it applies to.
+    for line in listing.splitlines():
+        m = _MAVEN_CK_DATE_RE.search(line)
+        if not m:
+            continue
         str_type, start_str, end_str = m.group(1), m.group(2), m.group(3)
         if str_type != structure:
             continue
         fname = m.group(0)
-        
-        # Guard 1: Drop duplicate regex evaluations from the HTML line string
+
         if fname in seen_files:
             continue
         seen_files.add(fname)
 
-        # Guard 2: Exclude archived files by checking the local HTML line prefix context
-        match_start = m.start()
-        context = listing[max(0, match_start-50):match_start]
-        if "archived/" in context:
+        if "archived/" in line:
             continue
 
         cov_start = _parse_maven_ck_date(start_str)
@@ -127,46 +141,33 @@ def resolve_maven_ck(time=None, time_range=None, structure="sc"):
         if _kc._window_contains(req_lo, req_hi, cov_start, cov_end):
             candidates.append((cov_start, fname))
 
-    # sort by coverage start date, oldest first
     candidates.sort(key=lambda x: x[0].jd)
     return [fname for _, fname in candidates]
 
 
 def get_kernel_urls(time=None, time_range=None, include_ck=True):
-    """
-    Resolve all MAVEN kernel URLs for a given time or time_range.
-
-    Returns dict[filename -> URL].
-    """
     urls = {}
 
-    # common kernels
-    for fname, subdir in select_common_kernels(time=time, time_range=time_range):
-        urls[fname] = _kc._NAIF_BASE + _kc._NAIF_SUBDIRS[subdir] + fname
+    fk_name = resolve_latest_maven_fk()
+    urls[fk_name] = _MAVEN_BASE + "fk/" + fk_name
 
-    # MAVEN static: FK + structure SPK
-    for fname, base_url in MAVEN_STATIC_KERNELS:
-        urls[fname] = base_url + fname
+    struct_name = resolve_latest_maven_struct_spk()
+    urls[struct_name] = _MAVEN_BASE + "spk/" + struct_name
 
-    # ancillary Mars/planetary SPK
     for fname, base_url in MAVEN_ANCILLARY_SPK:
         urls[fname] = base_url + fname
 
-    # latest SCLK
     sclk_name = resolve_maven_sclk()
     urls[sclk_name] = _MAVEN_BASE + "sclk/" + sclk_name
 
-    # reconstructed orbit SPK (rolling file, always current)
     orb_fname, orb_url = MAVEN_RECONSTRUCTED_SPK
     urls[orb_fname] = orb_url + orb_fname
 
-    # CK files
     if include_ck and (time is not None or time_range is not None):
         for ck_fname in resolve_maven_ck(time=time, time_range=time_range, structure="sc"):
             urls[ck_fname] = _MAVEN_BASE + "ck/" + ck_fname
 
     return urls
-
 
 # Backward-compatible alias for the pre-refactor name.
 get_maven_kernel_urls = get_kernel_urls

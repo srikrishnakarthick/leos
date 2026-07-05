@@ -1,4 +1,4 @@
-"""
+]"""
 LEOS: Light Environment Observatory for the Solar System
 A multi-language scientific framework for high-fidelity solar illumination, 
 spectral irradiance, and energy-availability computations across every body 
@@ -50,6 +50,7 @@ from .kernels.fetch_kernels import (
     get_maven_kernel_urls, resolve_maven_sclk, resolve_maven_ck,
     BODY_KERNELS, PLANET_CANDIDATE_KERNELS, ASTEROID_KERNEL_FILE,
     LAGRANGE_KERNELS, COMET_KERNELS, get_common_kernels,
+    KERNEL_ROOT, DATA_DIRS,   # <-- add this line
 )
 
 # 6. Spectrum Submodule Suite

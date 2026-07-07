@@ -478,7 +478,6 @@ def _best_effort_parse_date(token):
         return None
 
 
-_DE_VERSION_RE = re.compile(r"^de(\d+)(s)?\.bsp$", re.IGNORECASE)
 _DE_PART_RE = re.compile(r"^de(\d+)_part-(\d+)\.bsp$", re.IGNORECASE)
 
 
@@ -527,7 +526,7 @@ def resolve_best_planetary_spk(time=None, time_range=None):
     for fname in listing:
         m = _DE_VERSION_RE.match(fname) or _DE_PART_RE.match(fname)
         if not m:
-continue
+            continue
         num = int(m.group(1))
         by_version.setdefault(num, []).append(fname)
 
@@ -544,7 +543,7 @@ continue
     if kind == "single":
         fname = rest[0]
         _warn_if_uncovered(fname, time, time_range, coverage)
-       return [fname]
+        return [fname]
 
     if kind == "short_full":
         short_name, full_name = rest
@@ -702,15 +701,22 @@ def resolve_matching_lagrange_kernel(point, hardcoded_entry, planetary_de_versio
 
     if target_fname in listing:
         coverage = _fetch_spk_coverage_summary(_LAGRANGE_POINT_URL)
-        cov = coverage.get(target_fname, (None, None))
-        direction = "older" if hc_version < planetary_de_version else "newer"
+        cov = coverage.get(target_fname)
+        if cov is not None:
+            direction = "older" if hc_version < planetary_de_version else "newer"
+            print(
+                f"Note: switching {point} Lagrange kernel from '{hc_fname}' "
+                f"(de{hc_version}, {direction} than the resolved planetary "
+                f"SPK) to '{target_fname}' to match the session's planetary "
+                f"DE version (de{planetary_de_version})."
+            )
+            return (target_fname, "spk_lagrange_point", cov[0], cov[1])
         print(
-            f"Note: switching {point} Lagrange kernel from '{hc_fname}' "
-            f"(de{hc_version}, {direction} than the resolved planetary "
-            f"SPK) to '{target_fname}' to match the session's planetary "
-            f"DE version (de{planetary_de_version})."
+            f"Warning: '{target_fname}' exists on NAIF but its coverage "
+            f"window could not be parsed from aa_summaries.txt. Falling "
+            f"back to the hardcoded '{hc_fname}' rather than trust an "
+            f"unbounded window for an unverified file."
         )
-        return (target_fname, "spk_lagrange_point", cov[0], cov[1])
 
     # Plan B: no matching version published for this Lagrange point.
     # Fall back to the hardcoded file and make the mismatch loud.

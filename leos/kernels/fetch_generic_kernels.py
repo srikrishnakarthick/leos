@@ -166,27 +166,15 @@ def select_common_kernels(time=None, time_range=None):
 
     Dynamically resolves NAIF's current-best LSK, generic PCK, and
     planetary SPK from live directory listings instead of a hardcoded
-    filename list.
+    filename list. The planetary SPK resolver may return more than one
+    filename (e.g. de441_part-1.bsp + de441_part-2.bsp), so each is
+    paired individually with its subdir.
     """
-    return [
-        (resolve_latest_lsk(), "lsk"),
-        (resolve_latest_pck(), "pck"),
-        (resolve_best_planetary_spk(time=time, time_range=time_range), "spk_planets"),
-    ]
-
-if subdir == "spk_lagrange_point":
-        m = _LAGRANGE_VERSION_RE.match(fname)
-        point = fname.split("_")[0] if m else None
-        if point:
-            planetary_fnames = resolve_best_planetary_spk(time=time, time_range=time_range)
-            # Multiple parts can still only imply one DE version number;
-            # take it from any of them.
-            planetary_de_version = _kc._de_version_from_filename(planetary_fnames[0])
-            if planetary_de_version is not None:
-                entry = _kc.resolve_matching_lagrange_kernel(
-                    point, entry, planetary_de_version
-                )
-                fname, subdir, cov_start, cov_end = entry
+    de_files = resolve_best_planetary_spk(time=time, time_range=time_range)
+    return (
+        [(resolve_latest_lsk(), "lsk"), (resolve_latest_pck(), "pck")]
+        + [(fname, "spk_planets") for fname in de_files]
+    )
 
 def _select_named_static_kernel(entry, time=None, time_range=None, label=""):
     """
@@ -206,8 +194,8 @@ def _select_named_static_kernel(entry, time=None, time_range=None, label=""):
         m = _LAGRANGE_VERSION_RE.match(fname)
         point = fname.split("_")[0] if m else None
         if point:
-            planetary_fname = resolve_best_planetary_spk(time=time, time_range=time_range)
-            planetary_de_version = _kc._de_version_from_filename(planetary_fname)
+            planetary_fnames = resolve_best_planetary_spk(time=time, time_range=time_range)
+            planetary_de_version = _kc._de_version_from_filename(planetary_fnames[0])
             if planetary_de_version is not None:
                 entry = _kc.resolve_matching_lagrange_kernel(
                     point, entry, planetary_de_version

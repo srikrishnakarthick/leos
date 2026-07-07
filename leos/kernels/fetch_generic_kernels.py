@@ -27,6 +27,8 @@ from ._kernel_common import (
     resolve_latest_lsk,
     resolve_latest_pck,
     resolve_best_planetary_spk,
+    _LAGRANGE_VERSION_RE,   # add this
+
 )
 
 import calendar
@@ -36,8 +38,9 @@ _MONTH_NUM = {abbr.upper(): i for i, abbr in enumerate(calendar.month_abbr) if a
 # ── Body Kernel Registry ────────
 BODY_KERNELS = {
     "EARTH": [
-        # No additional kernels needed: de442.bsp (COMMON) + pck00011.tpc
-        # (COMMON) fully cover Earth's translational state and orientation.
+        # No additional kernels: the dynamically-resolved planetary SPK
+        # (see resolve_best_planetary_spk in _kernel_common.py) + generic
+        # PCK fully cover Earth's translational state and orientation.
     ],
     "MOON": [
         ("moon_pa_de440_200625.bpc", "pck", None, None),
@@ -45,29 +48,28 @@ BODY_KERNELS = {
     ],
     "MARS": [
         ("mars_iau2000_v1.tpc", "pck", None, None),
-        ("mar099s.bsp", "spk_satellites", "1995-01-01", "2050-01-01"),
-        ("mar099.bsp", "spk_satellites", "1600-01-01", "2600-01-02"),
+        # mar099s.bsp / mar099.bsp removed -- now resolved dynamically
+        # via _kc.resolve_best_mars_spk() in _select_body_kernels().
     ],
     "PHOBOS": [
         ("mars_iau2000_v1.tpc", "pck", None, None),
-        ("mar099s.bsp", "spk_satellites", "1995-01-01", "2050-01-01"),
-        ("mar099.bsp", "spk_satellites", "1600-01-01", "2600-01-02"),
     ],
     "DEIMOS": [
         ("mars_iau2000_v1.tpc", "pck", None, None),
-        ("mar099s.bsp", "spk_satellites", "1995-01-01", "2050-01-01"),
-        ("mar099.bsp", "spk_satellites", "1600-01-01", "2600-01-02"),
     ],
     "MERCURY": [
-    # de442.bsp (COMMON) fully covers Mercury's translational state.
-    # No moons. No orientation kernel in the generic set.
+        # No additional kernels: the dynamically-resolved planetary SPK
+        # (see resolve_best_planetary_spk in _kernel_common.py) fully
+        # covers Mercury's translational state. No moons, no dedicated
+        # orientation kernel in the generic set.
     ],
     "VENUS": [
-    # de442.bsp (COMMON) fully covers Venus's translational state.
-    # No moons. No orientation kernel in the generic set.
+        # No additional kernels: the dynamically-resolved planetary SPK
+        # (see resolve_best_planetary_spk in _kernel_common.py) fully
+        # covers Venus's translational state. No moons, no dedicated
+        # orientation kernel in the generic set.
     ],
 }
-
 
 # ── Giant-planet moon candidates ──────
 PLANET_CANDIDATE_KERNELS = {
@@ -134,7 +136,6 @@ COMET_KERNELS = {
 
 
 # ── Selection Helpers ────────────────────────────────────────────────────────
-
 def _select_body_kernels(body, time=None, time_range=None):
     clean_body = body.strip().upper()
     if clean_body not in BODY_KERNELS:
@@ -142,8 +143,18 @@ def _select_body_kernels(body, time=None, time_range=None):
             f"No registered kernel set for body '{body}'. "
             f"Known bodies: {sorted(BODY_KERNELS.keys())}."
         )
+
+    entries = BODY_KERNELS[clean_body]
+
+    # MARS/PHOBOS/DEIMOS all key off the same dynamically-resolved
+    # Mars satellite SPK; splice it in here instead of hardcoding
+    # mar099s.bsp/mar099.bsp in BODY_KERNELS.
+    if clean_body in ("MARS", "PHOBOS", "DEIMOS"):
+        mars_spk_entries = _kc.resolve_best_mars_spk(time=time, time_range=time_range)
+        entries = [e for e in entries if not e[0].startswith("mar0")] + mars_spk_entries
+
     return _select_time_filtered_kernels(
-        BODY_KERNELS[clean_body], time=time, time_range=time_range,
+        entries, time=time, time_range=time_range,
         context_label=f"'{body}'",
     )
 
@@ -163,14 +174,46 @@ def select_common_kernels(time=None, time_range=None):
         (resolve_best_planetary_spk(time=time, time_range=time_range), "spk_planets"),
     ]
 
+if subdir == "spk_lagrange_point":
+        m = _LAGRANGE_VERSION_RE.match(fname)
+        point = fname.split("_")[0] if m else None
+        if point:
+            planetary_fnames = resolve_best_planetary_spk(time=time, time_range=time_range)
+            # Multiple parts can still only imply one DE version number;
+            # take it from any of them.
+            planetary_de_version = _kc._de_version_from_filename(planetary_fnames[0])
+            if planetary_de_version is not None:
+                entry = _kc.resolve_matching_lagrange_kernel(
+                    point, entry, planetary_de_version
+                )
+                fname, subdir, cov_start, cov_end = entry
+
 def _select_named_static_kernel(entry, time=None, time_range=None, label=""):
     """
     entry: a (filename, subdir, cov_start, cov_end) tuple, e.g. a value
     pulled from LAGRANGE_KERNELS or COMET_KERNELS. Returns
     (filename, subdir) if the request falls within the kernel's
     validity window; raises ValueError otherwise.
+
+    For Lagrange point entries specifically, first checks whether the
+    hardcoded DE version matches whatever resolve_best_planetary_spk()
+    picked this session, and swaps to a matching-version file if NAIF
+    has one (see resolve_matching_lagrange_kernel in _kernel_common.py).
     """
     fname, subdir, cov_start, cov_end = entry
+
+    if subdir == "spk_lagrange_point":
+        m = _LAGRANGE_VERSION_RE.match(fname)
+        point = fname.split("_")[0] if m else None
+        if point:
+            planetary_fname = resolve_best_planetary_spk(time=time, time_range=time_range)
+            planetary_de_version = _kc._de_version_from_filename(planetary_fname)
+            if planetary_de_version is not None:
+                entry = _kc.resolve_matching_lagrange_kernel(
+                    point, entry, planetary_de_version
+                )
+                fname, subdir, cov_start, cov_end = entry
+
     req_lo, req_hi = _normalize_window(time, time_range)
     if not _window_contains(req_lo, req_hi, cov_start, cov_end):
         label_suffix = f" ({label})" if label else ""
@@ -179,7 +222,6 @@ def _select_named_static_kernel(entry, time=None, time_range=None, label=""):
             f"window ({req_lo}, {req_hi})."
         )
     return fname, subdir
-
 
 # ── Dynamic moon-kernel resolver ─────────────────────────────────────────────
 

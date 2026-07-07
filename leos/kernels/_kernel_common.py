@@ -478,11 +478,133 @@ def _best_effort_parse_date(token):
         return None
 
 
+_DE_VERSION_RE = re.compile(r"^de(\d+)(s)?\.bsp$", re.IGNORECASE)
+_DE_PART_RE = re.compile(r"^de(\d+)_part-(\d+)\.bsp$", re.IGNORECASE)
+
+
+def _classify_de_version(fnames):
+    """
+    Given all filenames on NAIF's spk/planets/ listing belonging to one DE
+    version number, classify them as:
+      ("single", fname)
+      ("short_full", short_fname, full_fname)   -- either may be None
+      ("parts", [fname, fname, ...])            -- sorted by part number
+    """
+    parts = sorted(
+        (int(_DE_PART_RE.match(f).group(2)), f)
+        for f in fnames if _DE_PART_RE.match(f)
+    )
+    if parts:
+        return ("parts", [f for _, f in parts])
+
+    short = next((f for f in fnames if f.lower().endswith("s.bsp")), None)
+    full = next((f for f in fnames if f.lower().endswith(".bsp") and f != short), None)
+    if short and full:
+        return ("short_full", short, full)
+    return ("single", full or short)
+
+
 def resolve_best_planetary_spk(time=None, time_range=None):
+    """
+    Returns a LIST of one or more filenames from NAIF's spk/planets/
+    needed to cover the request, for the highest-available DE version.
+
+    Behaviour per DE-version file layout:
+      - single file (e.g. de440.bsp): return [that file].
+- short+full (e.g. de442s.bsp/de442.bsp): return the short file if
+        its coverage contains the request, else the full file. With no
+        time window given, prefer the short file (smaller download).
+      - multi-part (e.g. de441_part-1.bsp/part-2.bsp): return every part
+        whose coverage overlaps the requested window. With no time
+        window given, return only the most recent part (smallest
+        reasonable default rather than downloading the whole multi-GB
+        set with no stated need).
+
+    Falls back to ["de442.bsp"] if the listing fetch fails entirely.
+    """
     listing = _fetch_directory_listing(_SPK_PLANETS_URL)
+    by_version = {}
+    for fname in listing:
+        m = _DE_VERSION_RE.match(fname) or _DE_PART_RE.match(fname)
+        if not m:
+continue
+        num = int(m.group(1))
+        by_version.setdefault(num, []).append(fname)
+
+    if not by_version:
+        print("Warning: could not determine latest planetary SPK from "
+              "listing; falling back to de442.bsp.")
+        return ["de442.bsp"]
+
+    best_version = max(by_version)
+    kind, *rest = _classify_de_version(by_version[best_version])
+    req_lo, req_hi = _normalize_window(time, time_range)
+    coverage = _fetch_spk_coverage_summary(_SPK_PLANETS_URL)
+
+    if kind == "single":
+        fname = rest[0]
+        _warn_if_uncovered(fname, time, time_range, coverage)
+       return [fname]
+
+    if kind == "short_full":
+        short_name, full_name = rest
+        if req_lo is None and req_hi is None:
+            return [short_name] if short_name else [full_name]
+        if short_name:
+            short_cov = coverage.get(short_name)
+            if short_cov and _window_contains(req_lo, req_hi, *short_cov):
+                return [short_name]
+        _warn_if_uncovered(full_name, time, time_range, coverage)
+        return [full_name]
+
+    # kind == "parts"
+    part_files = rest[0]
+    if req_lo is None and req_hi is None:
+        # No window given -- default to the most recent part only, since
+        # "shortest" for a multi-part deep-time ephemeris means "the part
+        # that covers the modern era", not "fewest bytes across all parts".
+        chosen = part_files[-1]
+        print(
+            f"No time window given for de{best_version} (multi-part "
+            f"ephemeris); defaulting to '{chosen}' (most recent part) "
+            f"rather than downloading all {len(part_files)} parts. Pass "
+            f"time= or time_range= to select parts by actual coverage."
+        )
+        return [chosen]
+
+    overlapping = [
+        f for f in part_files
+        if (cov := coverage.get(f)) and _window_overlaps(req_lo, req_hi, *cov)
+    ]
+    if not overlapping:
+        print(
+            f"Warning: could not verify which de{best_version} part(s) "
+            f"cover the requested window ({req_lo}, {req_hi}) -- "
+            f"aa_summaries.txt didn't yield parseable entries. Falling "
+            f"back to all {len(part_files)} parts to be safe."
+        )
+        return list(part_files)
+    return overlapping
+
+# ── Mars Satellite SPK (marNNN-series) ───────────────────────────────────
+
+_MAR_VERSION_RE = re.compile(r"^mar(\d+)(s)?\.bsp$", re.IGNORECASE)
+_SPK_SATELLITES_URL = _NAIF_BASE + _NAIF_SUBDIRS["spk_satellites"]
+
+
+def resolve_best_mars_spk(time=None, time_range=None):
+    """
+    Same short/full preference logic as resolve_best_planetary_spk, but for
+    NAIF's marNNN(s).bsp series (spk/satellites/, not spk/planets/):
+    marNNNs.bsp = tighter modern-coverage file, marNNN.bsp = long-coverage
+    fallback. Falls back to mar099s.bsp / mar099.bsp if the listing fetch
+    fails or nothing matches -- the same pair currently hardcoded in
+    BODY_KERNELS.
+    """
+    listing = _fetch_directory_listing(_SPK_SATELLITES_URL)
     versions = {}
     for fname in listing:
-        m = _DE_VERSION_RE.match(fname)
+        m = _MAR_VERSION_RE.match(fname)
         if not m:
             continue
         num = int(m.group(1))
@@ -490,41 +612,125 @@ def resolve_best_planetary_spk(time=None, time_range=None):
         versions.setdefault(num, {})[kind] = fname
 
     if not versions:
-        print("Warning: could not determine latest planetary SPK from "
-              "listing; falling back to de442.bsp.")
-        return "de442.bsp"
+        print("Warning: could not determine latest Mars satellite SPK from "
+              "listing; falling back to mar099s.bsp/mar099.bsp.")
+        return [
+            ("mar099s.bsp", "spk_satellites", "1995-01-01", "2050-01-01"),
+            ("mar099.bsp", "spk_satellites", "1600-01-01", "2600-01-02"),
+        ]
 
     candidates = versions[max(versions)]
     full_name, short_name = candidates.get("full"), candidates.get("short")
 
+    coverage = _fetch_spk_coverage_summary(_SPK_SATELLITES_URL)
+
+    def _cov_or_none(fname):
+        return coverage.get(fname)
+
     if not short_name:
-        _warn_if_uncovered(full_name, time, time_range)
-        return full_name
+        cov = _cov_or_none(full_name)
+        return [(full_name, "spk_satellites", cov[0] if cov else None, cov[1] if cov else None)]
     if not full_name:
-        _warn_if_uncovered(short_name, time, time_range)
-        return short_name
+        cov = _cov_or_none(short_name)
+        return [(short_name, "spk_satellites", cov[0] if cov else None, cov[1] if cov else None)]
 
     req_lo, req_hi = _normalize_window(time, time_range)
-    if req_lo is None and req_hi is None:
-        return short_name
+    short_cov = _cov_or_none(short_name)
+    full_cov = _cov_or_none(full_name)
 
-    coverage = _fetch_spk_coverage_summary(_SPK_PLANETS_URL)
-    short_cov = coverage.get(short_name)
-    if short_cov and _window_contains(req_lo, req_hi, *short_cov):
-        return short_name
+    entries = []
+    if short_cov:
+        entries.append((short_name, "spk_satellites", short_cov[0], short_cov[1]))
+    else:
+        entries.append((short_name, "spk_satellites", None, None))
+    if full_cov:
+        entries.append((full_name, "spk_satellites", full_cov[0], full_cov[1]))
+    else:
+        entries.append((full_name, "spk_satellites", None, None))
 
-    _warn_if_uncovered(full_name, time, time_range, coverage)
-    return full_name
+    return entries
+
+
+# ── Lagrange Point / Planetary DE-version consistency ───────────────────
+
+_LAGRANGE_VERSION_RE = re.compile(r"^L([12345])_de(\d+)\.bsp$", re.IGNORECASE)
+_ANY_DE_FILENAME_RE = re.compile(r"^de(\d+)(s)?(?:_part-(\d))?\.bsp$", re.IGNORECASE)
+_LAGRANGE_POINT_URL = _NAIF_BASE + _NAIF_SUBDIRS["spk_lagrange_point"]
+
+
+def _de_version_from_filename(fname):
+    """Extract the DE version number from any de-series filename
+    (de442.bsp, de442s.bsp, de441_part-1.bsp, ...). Returns None if the
+    filename doesn't match the expected pattern."""
+    m = _ANY_DE_FILENAME_RE.match(fname)
+    return int(m.group(1)) if m else None
+
+
+def resolve_matching_lagrange_kernel(point, hardcoded_entry, planetary_de_version):
+    """
+    Resolve the Lagrange point file for `point` (e.g. "L1") whose DE
+    version best matches `planetary_de_version` -- the DE version
+    resolve_best_planetary_spk() picked for this session.
+
+    hardcoded_entry: the existing (filename, subdir, cov_start, cov_end)
+    tuple from LAGRANGE_KERNELS, used as the fallback if no matching
+    version is available on NAIF.
+
+    Returns (filename, subdir, cov_start, cov_end), and always prints a
+    message when the returned file's DE version differs from
+    planetary_de_version, so a session-wide mismatch is never silent.
+
+    Plan B (no exact-version match found on NAIF, in either direction):
+    fall back to hardcoded_entry and warn. This never raises -- a
+    Lagrange/DE mismatch is a precision concern, not a hard failure, and
+    the caller should still get a usable kernel.
+    """
+    hc_fname, hc_subdir, hc_start, hc_end = hardcoded_entry
+    m = _LAGRANGE_VERSION_RE.match(hc_fname)
+    if not m:
+        # Unexpected filename shape; can't reason about versions at all.
+        return hardcoded_entry
+    hc_version = int(m.group(2))
+
+    if hc_version == planetary_de_version:
+        return hardcoded_entry  # No issue -- versions already match.
+
+    # Versions differ -- see if NAIF has a Lagrange file for the DE
+    # version the planetary resolver actually picked.
+    listing = _fetch_directory_listing(_LAGRANGE_POINT_URL)
+    target_fname = f"{point}_de{planetary_de_version}.bsp"
+
+    if target_fname in listing:
+        coverage = _fetch_spk_coverage_summary(_LAGRANGE_POINT_URL)
+        cov = coverage.get(target_fname, (None, None))
+        direction = "older" if hc_version < planetary_de_version else "newer"
+        print(
+            f"Note: switching {point} Lagrange kernel from '{hc_fname}' "
+            f"(de{hc_version}, {direction} than the resolved planetary "
+            f"SPK) to '{target_fname}' to match the session's planetary "
+            f"DE version (de{planetary_de_version})."
+        )
+        return (target_fname, "spk_lagrange_point", cov[0], cov[1])
+
+    # Plan B: no matching version published for this Lagrange point.
+    # Fall back to the hardcoded file and make the mismatch loud.
+    direction = (
+        "older than" if hc_version < planetary_de_version else "newer than"
+    )
+    print(
+        f"Warning: '{target_fname}' is not available on NAIF's "
+        f"lagrange_point/ directory. Falling back to the hardcoded "
+        f"'{hc_fname}', which is {direction} the resolved planetary SPK "
+        f"(de{planetary_de_version}). Positions for {point} will be "
+        f"computed from a different DE solution than the rest of this "
+        f"session's planetary ephemeris -- check "
+        f"{_LAGRANGE_POINT_URL}aa_summaries.txt if precision at this "
+        f"level matters for your use case."
+    )
+    return hardcoded_entry
 
 
 def _warn_if_uncovered(fname, time, time_range, coverage=None):
-    """
-    Best-effort check: if aa_summaries.txt gives us a coverage window for
-    `fname` and the request falls outside it, warn rather than fail --
-    NAIF's summary formatting isn't guaranteed stable enough to raise on,
-    but it's worth telling the user their request may return bad ephemeris
-    data at the edges of (or outside) the file's real validity range.
-    """
     req_lo, req_hi = _normalize_window(time, time_range)
     if req_lo is None and req_hi is None:
         return

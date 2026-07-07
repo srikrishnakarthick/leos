@@ -182,33 +182,3 @@ def fetch_kernels(target_dir=None, body=None, mission=None, filenames=None,
         else:
             print(f"  Warning: no checksum available for '{filename}'; downloaded but unverified.")
         _kc._log_citation(filename, url, context_label)
-# ── Citation Tracking (re-exported for backward compatibility) ──────────────
-get_citations = _kc.get_citations
-reset_citations = _kc.reset_citations
-
-
-# ── Backward-compatible re-exports ───────────────────────────────────────────
-# Anything elsewhere in leos/ that previously did e.g.
-#   from leos.kernels.fetch_kernels import resolve_moon_kernel
-# keeps working without touching that call site. Grep your codebase for
-# `fetch_kernels.` and `from leos.kernels.fetch_kernels import` to confirm
-# nothing relies on a name that ISN'T re-exported here.
-BODY_KERNELS = fetch_generic_kernels.BODY_KERNELS
-PLANET_CANDIDATE_KERNELS = fetch_generic_kernels.PLANET_CANDIDATE_KERNELS
-ASTEROID_KERNEL_FILE = fetch_generic_kernels.ASTEROID_KERNEL_FILE
-LAGRANGE_KERNELS = fetch_generic_kernels.LAGRANGE_KERNELS
-COMET_KERNELS = fetch_generic_kernels.COMET_KERNELS
-get_common_kernels = fetch_generic_kernels.select_common_kernels
-resolve_moon_kernel = fetch_generic_kernels.resolve_moon_kernel
-resolve_asteroid_kernel = fetch_generic_kernels.resolve_asteroid_kernel
-parse_kernel_comment = fetch_generic_kernels.parse_kernel_comment
-get_maven_kernel_urls = fetch_maven_kernels.get_kernel_urls
-resolve_maven_sclk = fetch_maven_kernels.resolve_maven_sclk
-resolve_maven_ck = fetch_maven_kernels.resolve_maven_ck
-fetch_remote_md5s = _kc.fetch_remote_md5s
-calculate_local_md5 = _kc.calculate_local_md5
-KERNEL_ROOT = _kc.KERNEL_ROOT
-DATA_DIRS = {
-    "generic": os.path.join(_kc.KERNEL_ROOT, "generic"),
-    "mission": os.path.join(_kc.KERNEL_ROOT, "mission"),
-}

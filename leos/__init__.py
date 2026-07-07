@@ -43,14 +43,21 @@ from .Atmosphere.atmosphere_mars import AtmosphericColumnMars, MarsAtmosphericSo
 from .Atmosphere.atmosphere_moon import MoonSurfaceConditions, MoonAtmosphericSource, MOON_ATMO_REGISTRY
 
 # 5. Kernels Submodule Suite
-from .kernels.fetch_kernels import (
-    fetch_remote_md5s, calculate_local_md5, get_dynamic_ephemeris_urls, fetch_kernels,
+from .kernels._kernel_common import (
+    fetch_remote_md5s, calculate_local_md5, KERNEL_ROOT, DATA_DIRS,
     get_citations, reset_citations,
+)
+from .kernels.fetch_kernels import (
+    get_dynamic_ephemeris_urls, fetch_kernels,
+)
+from .kernels.fetch_generic_kernels import (
     resolve_moon_kernel, resolve_asteroid_kernel, parse_kernel_comment,
-    get_maven_kernel_urls, resolve_maven_sclk, resolve_maven_ck,
     BODY_KERNELS, PLANET_CANDIDATE_KERNELS, ASTEROID_KERNEL_FILE,
-    LAGRANGE_KERNELS, COMET_KERNELS, get_common_kernels,
-    KERNEL_ROOT, DATA_DIRS,   # <-- add this line
+    LAGRANGE_KERNELS, COMET_KERNELS,
+    select_common_kernels as get_common_kernels,
+)
+from .kernels.missions.Mars.fetch_maven_kernels import (
+    get_maven_kernel_urls, resolve_maven_sclk, resolve_maven_ck,
 )
 
 # 6. Spectrum Submodule Suite

@@ -45,7 +45,10 @@ def reset_session_cache():
 KERNEL_ROOT = os.path.join(os.path.dirname(__file__), "data")
 _DEFAULT_KERNEL_ROOT = KERNEL_ROOT
 _CMT_CACHE_DIR = os.path.join(KERNEL_ROOT, "_cmt_cache")
-
+DATA_DIRS = {
+    "generic": os.path.join(KERNEL_ROOT, "generic"),
+    "mission": os.path.join(KERNEL_ROOT, "mission"),
+}
 
 # ── NAIF Subdirectory Map ────────────────────────────────────────────────────
 _NAIF_BASE = "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/"

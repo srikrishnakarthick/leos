@@ -404,57 +404,216 @@ def _fetch_spk_coverage_summary(subdir_url, filename="aa_summaries.txt"):
 
     _SESSION_CACHE[cache_key] = coverage
     return coverage
+# ── Generic Multi-File Kernel Resolution ─────────────────────────────────
+# Any kernel family (LSK, PCK, DE-series, Mars SPK, moon SPK, Lagrange,
+# ...) may have more than one file representing "the same logical
+# kernel version" -- either because NAIF ships a short/full pair
+# (de442s.bsp + de442.bsp), or a numbered-part split for size reasons
+# (de441_part-1.bsp + de441_part-2.bsp), or in principle both at once.
+# This is the one shared classifier + selector every per-family resolver
+# calls, replacing bespoke short/full and part-detection logic that used
+# to live separately in the DE-series and Mars-SPK resolvers.
+
+_GENERIC_PART_RE = re.compile(r"^(.*?)[_\-]part-?(\d+)(\..+)$", re.IGNORECASE)
+_GENERIC_SHORT_RE = re.compile(r"^(.*)s(\.[a-zA-Z0-9]+)$", re.IGNORECASE)
+
+
+def _classify_version_group(fnames, listing_sizes=None):
+    """
+    Given all filenames belonging to ONE logical kernel version (already
+    grouped by version number by the caller -- e.g. all files for de442,
+    or all files for naif0012), classify the relationship between them.
+
+    Returns a list of "candidate sets", where each candidate set is a
+    list of filenames that must be used TOGETHER to get one flavor of
+    complete coverage. Typically there are 1-2 candidate sets:
+      - one file, no variants:            [[fname]]
+      - short/full variants (no parts):   [[short], [full]]
+      - numbered parts (no short/full):   [[part1, part2, ...]]
+      - parts x short/full (general case, not seen yet but handled):
+                                           [[s_part1, s_part2, ...],
+                                            [f_part1, f_part2, ...]]
+
+    Candidate sets are ordered smallest-total-size first when sizes are
+    known (listing_sizes: {fname: bytes_or_None}), so callers that want
+    "smallest among latest" can just take candidate_sets[0].
+    """
+    parts_by_variant = {}   # variant_key -> {part_num: fname}
+    non_part_files = []
+
+    for fname in fnames:
+        m = _GENERIC_PART_RE.match(fname)
+        if m:
+            base, part_num, ext = m.group(1), int(m.group(2)), m.group(3)
+            sm = _GENERIC_SHORT_RE.match(base + ext)
+            variant_key = "short" if sm else "full"
+            parts_by_variant.setdefault(variant_key, {})[part_num] = fname
+        else:
+            non_part_files.append(fname)
+
+    candidate_sets = []
+
+    if parts_by_variant:
+        for variant_key in ("short", "full"):
+            if variant_key in parts_by_variant:
+                ordered = [
+                    parts_by_variant[variant_key][n]
+                    for n in sorted(parts_by_variant[variant_key])
+                ]
+                candidate_sets.append(ordered)
+    else:
+        short_files = [f for f in non_part_files if _GENERIC_SHORT_RE.match(f)]
+        full_files = [f for f in non_part_files if f not in short_files]
+        if short_files:
+            candidate_sets.append(short_files[:1])
+        if full_files:
+            candidate_sets.append(full_files[:1])
+
+    if not candidate_sets:
+        return []
+
+    if listing_sizes:
+        def total_size(cset):
+            sizes = [listing_sizes.get(f) for f in cset]
+            return sum(s for s in sizes if s is not None) if all(s is not None for s in sizes) else float("inf")
+        candidate_sets.sort(key=total_size)
+
+    return candidate_sets
+
+
+def resolve_versioned_kernel(version_groups, time=None, time_range=None,
+                               coverage_url=None, listing_sizes=None,
+                               fallback=None, label=""):
+    """
+    Shared entry point for every "pick the latest version, then pick the
+    right file(s) for the request" resolver in this module.
+
+    Parameters
+    ----------
+    version_groups : dict[version_number, list[filename]]
+        All filenames for this kernel family, grouped by version number
+        (grouping logic is family-specific and stays in the caller,
+        since "what counts as a version" differs per family).
+    coverage_url : str, optional
+        Base URL to fetch aa_summaries.txt from, for time-window
+        filtering. If None, time-window filtering is skipped (used for
+        kernel types like LSK/PCK that have no per-file time coverage
+        concept at all).
+    listing_sizes : dict[filename, bytes_or_None], optional
+        Byte sizes from _fetch_directory_listing, used to pick the
+        smallest candidate set when no time window is given.
+    fallback : list[str], optional
+        Returned if version_groups is empty (listing fetch failed).
+    label : str
+        Used in print() messages only.
+
+    Returns
+    -------
+    list[str]
+        One or more filenames needed to satisfy the request.
+    """
+    if not version_groups:
+        print(f"Warning: could not determine latest {label} from listing; "
+              f"falling back to {fallback}.")
+        return list(fallback) if fallback else []
+
+    best_version = max(version_groups)
+    candidate_sets = _classify_version_group(
+        version_groups[best_version], listing_sizes=listing_sizes
+    )
+    if not candidate_sets:
+        print(f"Warning: could not classify {label} version {best_version}'s "
+              f"files; falling back to {fallback}.")
+        return list(fallback) if fallback else []
+
+    req_lo, req_hi = _normalize_window(time, time_range)
+
+    if req_lo is None and req_hi is None:
+        # No window given: smallest candidate set wins (already sorted
+        # smallest-first by _classify_version_group when sizes are known).
+        return candidate_sets[0]
+
+    if coverage_url is None:
+        # This kernel type has no time-coverage concept (LSK/PCK); just
+        # return the smallest candidate set regardless of window.
+        return candidate_sets[0]
+
+    coverage = _fetch_spk_coverage_summary(coverage_url)
+
+    # Prefer whichever candidate set fully satisfies the window using
+    # the fewest/smallest files; fall back to whichever OVERLAPS it.
+    for cset in candidate_sets:
+        covs = [coverage.get(f) for f in cset]
+        if all(covs) and all(
+            _window_contains(req_lo, req_hi, *cov) for cov in covs
+        ):
+            return cset
+
+    # Nothing fully contains the window -- for multi-part sets, return
+    # every part that overlaps at all (a request spanning a part
+    # boundary needs both neighbors).
+    for cset in candidate_sets:
+        overlapping = [
+            f for f in cset
+            if (cov := coverage.get(f)) and _window_overlaps(req_lo, req_hi, *cov)
+        ]
+        if overlapping:
+            return overlapping
+
+    print(f"Warning: could not verify any {label} candidate covers the "
+          f"requested window ({req_lo}, {req_hi}); falling back to the "
+          f"largest/most complete candidate set to be safe.")
+    return candidate_sets[-1]
+
 # ── LSK ───────────────────────────────────────────────────────────────────
 
 _LSK_VERSION_RE = re.compile(r"^naif(\d+)\.tls$", re.IGNORECASE)
 
 
-def resolve_latest_lsk():
+def resolve_latest_lsk(time=None, time_range=None):
     """
-    Highest-numbered naifNNNN.tls in NAIF's lsk/ directory. Deliberately
-    excludes 'latest_leapseconds.tls' (an alias, not a stable filename to
-    pin to) and '.tls.pc' variants. Falls back to naif0012.tls if the
-    listing fetch fails or nothing matches.
+    Highest-numbered naifNNNN.tls in NAIF's lsk/ directory, routed
+    through the shared resolve_versioned_kernel() so it's handled
+    identically to every other kernel family if NAIF ever splits it.
+    Returns a list (one filename in the normal case).
     """
     listing = _fetch_directory_listing(_LSK_URL)
-    versions = [
-        (int(m.group(1)), fname)
-        for fname in listing
-        if (m := _LSK_VERSION_RE.match(fname))
-    ]
-    if not versions:
-        print("Warning: could not determine latest LSK from listing; "
-              "falling back to naif0012.tls.")
-        return "naif0012.tls"
-    return max(versions)[1]
+    by_version = {}
+    for fname in listing:
+        m = _LSK_VERSION_RE.match(fname)
+        if m:
+            by_version.setdefault(int(m.group(1)), []).append(fname)
 
+    return resolve_versioned_kernel(
+        by_version, time=time, time_range=time_range,
+        coverage_url=None,  # LSK has no per-file time coverage concept
+        listing_sizes=listing,
+        fallback=["naif0012.tls"], label="LSK",
+    )
 
 # ── PCK ───────────────────────────────────────────────────────────────────
 
 _PCK_VERSION_RE = re.compile(r"^pck(\d+)\.tpc$", re.IGNORECASE)
 
 
-def resolve_latest_pck():
+def resolve_latest_pck(time=None, time_range=None):
     """
-    Highest-numbered generic orientation/radii PCK (pckNNNNN.tpc) in
-    NAIF's pck/ directory. Excludes suffixed re-releases of the same
-    version (e.g. 'pck00011_n0066.tpc') and unrelated files sharing the
-    directory (Gravity.tpc, gm_de440.tpc, mars_iau2000_v1.tpc,
-    moon_pa_*.bpc, earth_*.bpc, etc.) via the strict '^pckNNNNN.tpc$'
-    match. Falls back to pck00011.tpc if the listing fetch fails.
+    Highest-numbered pckNNNNN.tpc in NAIF's pck/ directory, routed
+    through resolve_versioned_kernel(). Returns a list.
     """
     listing = _fetch_directory_listing(_PCK_URL)
-    versions = [
-        (int(m.group(1)), fname)
-        for fname in listing
-        if (m := _PCK_VERSION_RE.match(fname))
-    ]
-    if not versions:
-        print("Warning: could not determine latest PCK from listing; "
-              "falling back to pck00011.tpc.")
-        return "pck00011.tpc"
-    return max(versions)[1]
+    by_version = {}
+    for fname in listing:
+        m = _PCK_VERSION_RE.match(fname)
+        if m:
+            by_version.setdefault(int(m.group(1)), []).append(fname)
 
+    return resolve_versioned_kernel(
+        by_version, time=time, time_range=time_range,
+        coverage_url=None,
+        listing_sizes=listing,
+        fallback=["pck00011.tpc"], label="PCK",
+    )
 
 # ── Planetary SPK (DE-series) ────────────────────────────────────────────
 
@@ -478,178 +637,57 @@ def _best_effort_parse_date(token):
         return None
 
 
-_DE_PART_RE = re.compile(r"^de(\d+)_part-(\d+)\.bsp$", re.IGNORECASE)
-
-
-def _classify_de_version(fnames):
-    """
-    Given all filenames on NAIF's spk/planets/ listing belonging to one DE
-    version number, classify them as:
-      ("single", fname)
-      ("short_full", short_fname, full_fname)   -- either may be None
-      ("parts", [fname, fname, ...])            -- sorted by part number
-    """
-    parts = sorted(
-        (int(_DE_PART_RE.match(f).group(2)), f)
-        for f in fnames if _DE_PART_RE.match(f)
-    )
-    if parts:
-        return ("parts", [f for _, f in parts])
-
-    short = next((f for f in fnames if f.lower().endswith("s.bsp")), None)
-    full = next((f for f in fnames if f.lower().endswith(".bsp") and f != short), None)
-    if short and full:
-        return ("short_full", short, full)
-    return ("single", full or short)
+_DE_ANY_RE = re.compile(r"^de(\d+)(s)?(?:[_\-]part-?\d+)?\.bsp$", re.IGNORECASE)
 
 
 def resolve_best_planetary_spk(time=None, time_range=None):
     """
-    Returns a LIST of one or more filenames from NAIF's spk/planets/
-    needed to cover the request, for the highest-available DE version.
-
-    Behaviour per DE-version file layout:
-      - single file (e.g. de440.bsp): return [that file].
-- short+full (e.g. de442s.bsp/de442.bsp): return the short file if
-        its coverage contains the request, else the full file. With no
-        time window given, prefer the short file (smaller download).
-      - multi-part (e.g. de441_part-1.bsp/part-2.bsp): return every part
-        whose coverage overlaps the requested window. With no time
-        window given, return only the most recent part (smallest
-        reasonable default rather than downloading the whole multi-GB
-        set with no stated need).
-
-    Falls back to ["de442.bsp"] if the listing fetch fails entirely.
+    Highest-available DE version on NAIF's spk/planets/, routed through
+    resolve_versioned_kernel(). Handles single-file (de440.bsp),
+    short+full (de442s/de442), and multi-part (de441_part-1/part-2)
+    layouts uniformly. Returns a list of one or more filenames.
     """
     listing = _fetch_directory_listing(_SPK_PLANETS_URL)
     by_version = {}
     for fname in listing:
-        m = _DE_VERSION_RE.match(fname) or _DE_PART_RE.match(fname)
-        if not m:
-            continue
-        num = int(m.group(1))
-        by_version.setdefault(num, []).append(fname)
+        m = _DE_ANY_RE.match(fname)
+        if m:
+            by_version.setdefault(int(m.group(1)), []).append(fname)
 
-    if not by_version:
-        print("Warning: could not determine latest planetary SPK from "
-              "listing; falling back to de442.bsp.")
-        return ["de442.bsp"]
-
-    best_version = max(by_version)
-    kind, *rest = _classify_de_version(by_version[best_version])
-    req_lo, req_hi = _normalize_window(time, time_range)
-    coverage = _fetch_spk_coverage_summary(_SPK_PLANETS_URL)
-
-    if kind == "single":
-        fname = rest[0]
-        _warn_if_uncovered(fname, time, time_range, coverage)
-        return [fname]
-
-    if kind == "short_full":
-        short_name, full_name = rest
-        if req_lo is None and req_hi is None:
-            return [short_name] if short_name else [full_name]
-        if short_name:
-            short_cov = coverage.get(short_name)
-            if short_cov and _window_contains(req_lo, req_hi, *short_cov):
-                return [short_name]
-        _warn_if_uncovered(full_name, time, time_range, coverage)
-        return [full_name]
-
-    # kind == "parts"
-    part_files = rest[0]
-    if req_lo is None and req_hi is None:
-        # No window given -- default to the most recent part only, since
-        # "shortest" for a multi-part deep-time ephemeris means "the part
-        # that covers the modern era", not "fewest bytes across all parts".
-        chosen = part_files[-1]
-        print(
-            f"No time window given for de{best_version} (multi-part "
-            f"ephemeris); defaulting to '{chosen}' (most recent part) "
-            f"rather than downloading all {len(part_files)} parts. Pass "
-            f"time= or time_range= to select parts by actual coverage."
-        )
-        return [chosen]
-
-    overlapping = [
-        f for f in part_files
-        if (cov := coverage.get(f)) and _window_overlaps(req_lo, req_hi, *cov)
-    ]
-    if not overlapping:
-        print(
-            f"Warning: could not verify which de{best_version} part(s) "
-            f"cover the requested window ({req_lo}, {req_hi}) -- "
-            f"aa_summaries.txt didn't yield parseable entries. Falling "
-            f"back to all {len(part_files)} parts to be safe."
-        )
-        return list(part_files)
-    return overlapping
+    return resolve_versioned_kernel(
+        by_version, time=time, time_range=time_range,
+        coverage_url=_SPK_PLANETS_URL,
+        listing_sizes=listing,
+        fallback=["de442.bsp"], label="planetary SPK",
+    )
 
 # ── Mars Satellite SPK (marNNN-series) ───────────────────────────────────
-
-_MAR_VERSION_RE = re.compile(r"^mar(\d+)(s)?\.bsp$", re.IGNORECASE)
 _SPK_SATELLITES_URL = _NAIF_BASE + _NAIF_SUBDIRS["spk_satellites"]
+_MAR_ANY_RE = re.compile(r"^mar(\d+)(s)?(?:[_\-]part-?\d+)?\.bsp$", re.IGNORECASE)
 
 
 def resolve_best_mars_spk(time=None, time_range=None):
+
     """
-    Same short/full preference logic as resolve_best_planetary_spk, but for
-    NAIF's marNNN(s).bsp series (spk/satellites/, not spk/planets/):
-    marNNNs.bsp = tighter modern-coverage file, marNNN.bsp = long-coverage
-    fallback. Falls back to mar099s.bsp / mar099.bsp if the listing fetch
-    fails or nothing matches -- the same pair currently hardcoded in
-    BODY_KERNELS.
+    Highest-available marNNN version on NAIF's spk/satellites/, routed
+    through resolve_versioned_kernel(). Returns a list of filenames
+    (plain strings -- callers needing the (fname, subdir, cov_start,
+    cov_end) tuple shape used elsewhere in BODY_KERNELS should look up
+    coverage separately via _fetch_spk_coverage_summary if needed).
     """
     listing = _fetch_directory_listing(_SPK_SATELLITES_URL)
-    versions = {}
+    by_version = {}
     for fname in listing:
-        m = _MAR_VERSION_RE.match(fname)
-        if not m:
-            continue
-        num = int(m.group(1))
-        kind = "short" if m.group(2) else "full"
-        versions.setdefault(num, {})[kind] = fname
+        m = _MAR_ANY_RE.match(fname)
+        if m:
+            by_version.setdefault(int(m.group(1)), []).append(fname)
 
-    if not versions:
-        print("Warning: could not determine latest Mars satellite SPK from "
-              "listing; falling back to mar099s.bsp/mar099.bsp.")
-        return [
-            ("mar099s.bsp", "spk_satellites", "1995-01-01", "2050-01-01"),
-            ("mar099.bsp", "spk_satellites", "1600-01-01", "2600-01-02"),
-        ]
-
-    candidates = versions[max(versions)]
-    full_name, short_name = candidates.get("full"), candidates.get("short")
-
-    coverage = _fetch_spk_coverage_summary(_SPK_SATELLITES_URL)
-
-    def _cov_or_none(fname):
-        return coverage.get(fname)
-
-    if not short_name:
-        cov = _cov_or_none(full_name)
-        return [(full_name, "spk_satellites", cov[0] if cov else None, cov[1] if cov else None)]
-    if not full_name:
-        cov = _cov_or_none(short_name)
-        return [(short_name, "spk_satellites", cov[0] if cov else None, cov[1] if cov else None)]
-
-    req_lo, req_hi = _normalize_window(time, time_range)
-    short_cov = _cov_or_none(short_name)
-    full_cov = _cov_or_none(full_name)
-
-    entries = []
-    if short_cov:
-        entries.append((short_name, "spk_satellites", short_cov[0], short_cov[1]))
-    else:
-        entries.append((short_name, "spk_satellites", None, None))
-    if full_cov:
-        entries.append((full_name, "spk_satellites", full_cov[0], full_cov[1]))
-    else:
-        entries.append((full_name, "spk_satellites", None, None))
-
-    return entries
-
-
+    return resolve_versioned_kernel(
+        by_version, time=time, time_range=time_range,
+        coverage_url=_SPK_SATELLITES_URL,
+        listing_sizes=listing,
+        fallback=["mar099s.bsp", "mar099.bsp"], label="Mars satellite SPK",
+    )
 # ── Lagrange Point / Planetary DE-version consistency ───────────────────
 
 _LAGRANGE_VERSION_RE = re.compile(r"^L([12345])_de(\d+)\.bsp$", re.IGNORECASE)

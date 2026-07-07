@@ -144,14 +144,11 @@ def _select_body_kernels(body, time=None, time_range=None):
             f"Known bodies: {sorted(BODY_KERNELS.keys())}."
         )
 
-    entries = BODY_KERNELS[clean_body]
+    entries = list(BODY_KERNELS[clean_body])
 
-    # MARS/PHOBOS/DEIMOS all key off the same dynamically-resolved
-    # Mars satellite SPK; splice it in here instead of hardcoding
-    # mar099s.bsp/mar099.bsp in BODY_KERNELS.
     if clean_body in ("MARS", "PHOBOS", "DEIMOS"):
-        mars_spk_entries = _kc.resolve_best_mars_spk(time=time, time_range=time_range)
-        entries = [e for e in entries if not e[0].startswith("mar0")] + mars_spk_entries
+        mars_fnames = _kc.resolve_best_mars_spk(time=time, time_range=time_range)
+        entries += [(f, "spk_satellites", None, None) for f in mars_fnames]
 
     return _select_time_filtered_kernels(
         entries, time=time, time_range=time_range,
@@ -160,21 +157,15 @@ def _select_body_kernels(body, time=None, time_range=None):
 
 
 def select_common_kernels(time=None, time_range=None):
-    """
-    Public (no leading underscore, unlike the rest of this module's helpers)
-    because kernels/missions/* needs it too.
-
-    Dynamically resolves NAIF's current-best LSK, generic PCK, and
-    planetary SPK from live directory listings instead of a hardcoded
-    filename list. The planetary SPK resolver may return more than one
-    filename (e.g. de441_part-1.bsp + de441_part-2.bsp), so each is
-    paired individually with its subdir.
-    """
+    lsk_files = resolve_latest_lsk(time=time, time_range=time_range)
+    pck_files = resolve_latest_pck(time=time, time_range=time_range)
     de_files = resolve_best_planetary_spk(time=time, time_range=time_range)
     return (
-        [(resolve_latest_lsk(), "lsk"), (resolve_latest_pck(), "pck")]
-        + [(fname, "spk_planets") for fname in de_files]
+        [(f, "lsk") for f in lsk_files]
+        + [(f, "pck") for f in pck_files]
+        + [(f, "spk_planets") for f in de_files]
     )
+
 
 def _select_named_static_kernel(entry, time=None, time_range=None, label=""):
     """

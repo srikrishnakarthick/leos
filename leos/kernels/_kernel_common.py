@@ -269,6 +269,33 @@ def calculate_local_md5(filepath):
             hash_md5.update(chunk)
     return hash_md5.hexdigest()
 
+# ── Remote File Size (HEAD request) ──────────────────────────────────────
+
+def fetch_remote_size(url, timeout=10):
+    """
+    Best-effort Content-Length via HTTP HEAD. Returns int bytes, or None
+    if the server doesn't report a size or the request fails (caller
+    must handle None gracefully -- this must never raise).
+    """
+    try:
+        resp = requests.head(url, timeout=timeout, allow_redirects=True)
+        resp.raise_for_status()
+        cl = resp.headers.get("Content-Length")
+        return int(cl) if cl is not None else None
+    except Exception as e:
+        print(f"Warning: could not determine size for {url} ({e}).")
+        return None
+
+
+def format_size(num_bytes):
+    """Human-readable size string, or '(unknown size)' if None."""
+    if num_bytes is None:
+        return "(unknown size)"
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if num_bytes < 1024:
+            return f"{num_bytes:.1f}{unit}"
+        num_bytes /= 1024
+    return f"{num_bytes:.1f}PB"
 
 # ── Filename → Subdirectory Inference ────────────────────────────────────────
 

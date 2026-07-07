@@ -13,6 +13,7 @@ loop, since that part is identical regardless of where the URLs came from.
 """
 
 import os
+import shutil
 import requests
 
 from . import _kernel_common as _kc
@@ -71,12 +72,75 @@ def get_dynamic_ephemeris_urls(body=None, mission=None, filenames=None,
                 f"No registered kernel set for mission '{mission}'. "
                 f"Known missions: {sorted(MISSION_RESOLVERS.keys())}."
             )
-        urls.update(MISSION_RESOLVERS[clean_mission](time=time, time_range=time_range))
+        resolver_kwargs = {"time": time, "time_range": time_range}
+        if clean_mission == "MAVEN":
+            resolver_kwargs["include_common"] = not bool(body)
+        urls.update(MISSION_RESOLVERS[clean_mission](**resolver_kwargs))
 
     if not urls:
         raise ValueError("get_dynamic_ephemeris_urls() needs at least one of: body, mission, filenames.")
     return urls
 
+def _confirm_and_resolve_paths(queue, mission_filenames, generic_dir, mission_dir,
+                                reused_from_generic):
+    """
+    Shows the user every file that would be downloaded (skipping ones
+    already verified/reused), its source URL, and its size. Asks Y/N.
+
+    Returns a dict[filename -> local_filepath] that the download loop
+    should treat as "already resolved, just verify/copy" -- OR None if
+    the user said Y and the normal download loop should proceed as-is.
+    """
+    to_confirm = [
+        (fname, url) for fname, url in queue.items()
+        if fname not in reused_from_generic
+    ]
+
+    if not to_confirm:
+        return None  # nothing to ask about; everything already local
+
+    print("\nThe following files will be downloaded:\n")
+    sized = []
+    for fname, url in to_confirm:
+        size = _kc.fetch_remote_size(url)
+        sized.append((fname, url, size))
+        dest_kind = "mission" if fname in mission_filenames else "generic"
+        print(f"  [{dest_kind}] {fname}")
+        print(f"      URL:  {url}")
+        print(f"      Size: {_kc.format_size(size)}")
+
+    answer = input("\nProceed with download? [Y/N]: ").strip().upper()
+
+    if answer == "Y":
+        return None  # normal download path
+
+    # ── Manual path: N, or anything else, is treated as "can't/won't
+    #    download automatically" ──────────────────────────────────────
+    print("\nPlease download the following files manually, then provide "
+          "their local paths.\n")
+    for fname, url, size in sized:
+        print(f"  {fname}")
+        print(f"      URL:  {url}")
+        print(f"      Size: {_kc.format_size(size)}")
+
+    print(f"\nEnter the local paths of the downloaded files, in the exact "
+          f"same order as listed above, separated by commas:")
+    raw = input("> ").strip()
+    provided = [p.strip() for p in raw.split(",")]
+
+    if len(provided) != len(sized):
+        raise ValueError(
+            f"Expected {len(sized)} path(s), got {len(provided)}. "
+            f"Re-run fetch_kernels() and provide exactly one path per "
+            f"listed file, in order, comma-separated."
+        )
+
+    resolved = {}
+    for (fname, url, size), path in zip(sized, provided):
+        if not os.path.isfile(path):
+            raise ValueError(f"'{path}' (for {fname}) does not exist or is not a file.")
+        resolved[fname] = path
+    return resolved
 
 # ── Main Fetch Routine ───────────────────────────────────────────────────────
 
@@ -102,7 +166,10 @@ def fetch_kernels(target_dir=None, body=None, mission=None, filenames=None,
                 f"No registered kernel set for mission '{mission}'. "
                 f"Known missions: {sorted(MISSION_RESOLVERS.keys())}."
             )
-        mission_urls = get_dynamic_ephemeris_urls(mission=mission, time=time, time_range=time_range)
+        resolver_kwargs = {"time": time, "time_range": time_range}
+        if clean_mission == "MAVEN":
+            resolver_kwargs["include_common"] = not bool(body)
+        mission_urls = MISSION_RESOLVERS[clean_mission](**resolver_kwargs)
         mission_filenames.update(mission_urls.keys())
         queue.update(mission_urls)
 
@@ -136,6 +203,10 @@ def fetch_kernels(target_dir=None, body=None, mission=None, filenames=None,
     context_label = mission if mission else body
     manifest_cache = {}
 
+    manual_paths = _confirm_and_resolve_paths(
+        queue, mission_filenames, generic_dir, mission_dir, reused_from_generic
+    )
+
     for filename, url in queue.items():
         if filename in reused_from_generic:
             print(f"  Reusing existing generic copy (no duplicate mission "
@@ -155,6 +226,31 @@ def fetch_kernels(target_dir=None, body=None, mission=None, filenames=None,
         else:
             expected_md5 = None
 
+        if manual_paths is not None:
+            # ── User supplied a manually-downloaded file instead ──────
+            src_path = manual_paths[filename]
+            if expected_md5:
+                actual_md5 = _kc.calculate_local_md5(src_path)
+                if actual_md5 != expected_md5:
+                    raise ValueError(
+                        f"MD5 verification failed for manually-provided "
+                        f"'{filename}' at '{src_path}': "
+                        f"expected {expected_md5}, got {actual_md5}. "
+                        f"Re-download from {url} and try again."
+                    )
+                print(f"  Verified (MD5 match) manual file: {filename}")
+            else:
+                if os.path.getsize(src_path) > 0:
+                    print(f"  File size is non-zero, but no checksum was "
+                          f"available to verify '{filename}'.")
+                else:
+                    print(f"  Warning: manually-provided '{filename}' has "
+                          f"zero file size.")
+            if os.path.abspath(src_path) != os.path.abspath(dest):
+                shutil.copyfile(src_path, dest)
+            _kc._log_citation(filename, url, context_label)
+            continue
+
         if os.path.exists(dest):
             if expected_md5:
                 if _kc.calculate_local_md5(dest) == expected_md5:
@@ -163,7 +259,8 @@ def fetch_kernels(target_dir=None, body=None, mission=None, filenames=None,
                     continue
             else:
                 if os.path.getsize(dest) > 0:
-                    print(f"  Verified via document footprint: {filename}")
+                    print(f"  File size is non-zero, but no checksum was "
+                          f"available to verify '{filename}'.")
                     _kc._log_citation(filename, url, context_label)
                     continue
 
@@ -180,5 +277,10 @@ def fetch_kernels(target_dir=None, body=None, mission=None, filenames=None,
                 raise ValueError(f"MD5 verification failure on newly downloaded asset: {filename}")
             print(f"  Successfully verified and saved: {filename}")
         else:
-            print(f"  Warning: no checksum available for '{filename}'; downloaded but unverified.")
+            if os.path.getsize(dest) > 0:
+                print(f"  File size is non-zero, but no checksum was "
+                      f"available to verify '{filename}'.")
+            else:
+                print(f"  Warning: '{filename}' downloaded but file size "
+                      f"is zero.")
         _kc._log_citation(filename, url, context_label)

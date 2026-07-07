@@ -57,10 +57,6 @@ def resolve_latest_maven_struct_spk():
 
 MAVEN_RECONSTRUCTED_SPK = ("maven_orb_rec.bsp", _MAVEN_BASE + "spk/")
 MAVEN_PREDICTED_SPK = ("maven_orb.bsp", _MAVEN_BASE + "spk/")
-MAVEN_ANCILLARY_SPK = [
-    ("de421.bsp",    _MAVEN_BASE + "spk/"),
-    ("mar097s.bsp",  _MAVEN_BASE + "spk/"),
-]
 
 def resolve_maven_sclk():
     """
@@ -145,7 +141,8 @@ def resolve_maven_ck(time=None, time_range=None, structure="sc"):
     return [fname for _, fname in candidates]
 
 
-def get_kernel_urls(time=None, time_range=None, include_ck=True):
+def get_kernel_urls(time=None, time_range=None, include_ck=True,
+                     include_common=True):
     urls = {}
 
     fk_name = resolve_latest_maven_fk()
@@ -154,8 +151,12 @@ def get_kernel_urls(time=None, time_range=None, include_ck=True):
     struct_name = resolve_latest_maven_struct_spk()
     urls[struct_name] = _MAVEN_BASE + "spk/" + struct_name
 
-    for fname, base_url in MAVEN_ANCILLARY_SPK:
-        urls[fname] = base_url + fname
+    if include_common:
+        for fname, subdir in select_common_kernels(time=time, time_range=time_range):
+            urls[fname] = _kc._NAIF_BASE + _kc._NAIF_SUBDIRS[subdir] + fname
+
+        for fname in _kc.resolve_best_mars_spk(time=time, time_range=time_range):
+            urls[fname] = _kc._NAIF_BASE + _kc._NAIF_SUBDIRS["spk_satellites"] + fname
 
     sclk_name = resolve_maven_sclk()
     urls[sclk_name] = _MAVEN_BASE + "sclk/" + sclk_name

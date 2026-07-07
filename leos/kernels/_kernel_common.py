@@ -529,8 +529,22 @@ def resolve_versioned_kernel(version_groups, time=None, time_range=None,
     req_lo, req_hi = _normalize_window(time, time_range)
 
     if req_lo is None and req_hi is None:
-        # No window given: smallest candidate set wins (already sorted
-        # smallest-first by _classify_version_group when sizes are known).
+        # No window given: pick the single smallest file across ALL
+        # candidates, not the smallest candidate SET -- a multi-part set
+        # like [de441_part-1.bsp, de441_part-2.bsp] would otherwise
+        # return both parts (multi-GB) when the person asked for nothing
+        # in particular. Falls back to candidate_sets[0] (smallest SET)
+        # only if no size data is available to compare individual files.
+        all_files = [f for cset in candidate_sets for f in cset]
+        if listing_sizes and all(listing_sizes.get(f) is not None for f in all_files):
+            return [min(all_files, key=lambda f: listing_sizes[f])]
+        print(
+            f"Note: no time window given for {label}; file sizes "
+            f"unavailable from the directory listing, so returning the "
+            f"smallest known candidate SET ({candidate_sets[0]}) rather "
+            f"than the single smallest file. Pass time= or time_range= "
+            f"for precise part selection."
+        )
         return candidate_sets[0]
 
     if coverage_url is None:
@@ -691,7 +705,7 @@ def resolve_best_mars_spk(time=None, time_range=None):
 # ── Lagrange Point / Planetary DE-version consistency ───────────────────
 
 _LAGRANGE_VERSION_RE = re.compile(r"^L([12345])_de(\d+)\.bsp$", re.IGNORECASE)
-_ANY_DE_FILENAME_RE = re.compile(r"^de(\d+)(s)?(?:_part-(\d))?\.bsp$", re.IGNORECASE)
+_ANY_DE_FILENAME_RE = re.compile(r"^de(\d+)(s)?(?:[_\-]part-?\d+)?\.bsp$", re.IGNORECASE)
 _LAGRANGE_POINT_URL = _NAIF_BASE + _NAIF_SUBDIRS["spk_lagrange_point"]
 
 

@@ -191,7 +191,7 @@ def fetch_kernels(target_dir=None, body=None, mission=None, filenames=None,
     # supersede the generic "best" globally.
     reused_from_generic = set()
     for filename in list(mission_filenames):
-        if filename in (body and queue.keys() or []):
+        if body and filename in queue:
             continue  # already a generic-resolved file, not a mission dupe case
         subdir_key = _kc._subdir_for(filename)
         if subdir_key not in ("lsk", "pck", "spk_planets", "spk_satellites"):

@@ -46,18 +46,25 @@ from .Atmosphere.atmosphere_moon import MoonSurfaceConditions, MoonAtmosphericSo
 from .kernels._kernel_common import (
     fetch_remote_md5s, calculate_local_md5, KERNEL_ROOT, DATA_DIRS,
     get_citations, reset_citations,
+    reset_session_cache, fetch_remote_size, format_size,
+    resolve_versioned_kernel, resolve_latest_lsk, resolve_latest_pck,
+    resolve_best_planetary_spk, resolve_best_mars_spk,
+    resolve_matching_lagrange_kernel,
 )
 from .kernels.fetch_kernels import (
-    get_dynamic_ephemeris_urls, fetch_kernels,
+    get_dynamic_ephemeris_urls, fetch_kernels, MISSION_RESOLVERS,
 )
 from .kernels.fetch_generic_kernels import (
     resolve_moon_kernel, resolve_asteroid_kernel, parse_kernel_comment,
+    get_generic_kernel_urls,
     BODY_KERNELS, PLANET_CANDIDATE_KERNELS, ASTEROID_KERNEL_FILE,
     LAGRANGE_KERNELS, COMET_KERNELS,
     select_common_kernels as get_common_kernels,
 )
 from .kernels.missions.Mars.fetch_maven_kernels import (
     get_maven_kernel_urls, resolve_maven_sclk, resolve_maven_ck,
+    resolve_latest_maven_fk, resolve_latest_maven_struct_spk,
+    resolve_maven_orbit_spk,
 )
 
 # 6. Spectrum Submodule Suite
@@ -252,4 +259,18 @@ __all__ = [
     "write_mcd_npz",
     "write_merra2_npz",
     "write_satire_npz",
+    "MISSION_RESOLVERS",
+    "fetch_remote_size",
+    "format_size",
+    "get_generic_kernel_urls",
+    "reset_session_cache",
+    "resolve_best_mars_spk",
+    "resolve_best_planetary_spk",
+    "resolve_latest_lsk",
+    "resolve_latest_maven_fk",
+    "resolve_latest_maven_struct_spk",
+    "resolve_latest_pck",
+    "resolve_matching_lagrange_kernel",
+    "resolve_maven_orbit_spk",
+    "resolve_versioned_kernel",
 ]

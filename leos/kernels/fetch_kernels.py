@@ -99,15 +99,19 @@ def _confirm_and_resolve_paths(queue, mission_filenames, generic_dir, mission_di
     if not to_confirm:
         return None  # nothing to ask about; everything already local
 
-    print("\nThe following files will be downloaded:\n")
+    print(f"\nThe following files will be downloaded to '{generic_dir}' "
+          f"(generic) / '{mission_dir}' (mission):\n")
     sized = []
     for fname, url in to_confirm:
         size = _kc.fetch_remote_size(url)
         sized.append((fname, url, size))
         dest_kind = "mission" if fname in mission_filenames else "generic"
+        dest_dir = mission_dir if fname in mission_filenames else generic_dir
+        dest_path = os.path.join(dest_dir, fname)
         print(f"  [{dest_kind}] {fname}")
         print(f"      URL:  {url}")
         print(f"      Size: {_kc.format_size(size)}")
+        print(f"      Path: {dest_path}")
 
     answer = input("\nProceed with download? [Y/N]: ").strip().upper()
 
